@@ -1,0 +1,20 @@
+stages:
+  prepare:
+    cmd: python src/data/prepare_data.py
+    deps:
+      - src/data/prepare_data.py
+      - data/raw
+    outs:
+      - data/processed
+  
+  train:
+    cmd: python src/models/train.py
+    deps:
+      - src/models/train.py
+      - data/processed
+    outs:
+      - models/trained
+      - metrics.json
+    metrics:
+      - metrics.json:
+          cache: false

@@ -1,0 +1,31 @@
+[tool.poetry]
+name = "personal-stylist"
+version = "0.1.0"
+description = ""
+authors = ["Daria Prudnikova"]
+license = "MIT License"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+pandas = "^2.2.3"
+numpy = "^2.2.3"
+fastapi = "^0.115.11"
+uvicorn = "^0.34.0"
+neo4j = "^5.28.1"
+kafka-python = "^2.0.5"
+redis = "^5.2.1"
+torch = "^2.6.0"
+transformers = "^4.49.0"
+faiss-cpu = "^1.10.0"
+chromadb = "^0.6.3"
+aiogram = "^3.18.0"
+peft = "^0.14.0"
+loguru = "^0.7.3"
+dvc = "^3.59.1"
+prometheus-client = "^0.21.1"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
