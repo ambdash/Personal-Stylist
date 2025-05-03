@@ -24,6 +24,12 @@ peft = "^0.14.0"
 loguru = "^0.7.3"
 dvc = "^3.59.1"
 prometheus-client = "^0.21.1"
+python-dotenv = "^1.1.0"
+openai = "^1.76.0"
+aiohttp = "^3.11.18"
+playwright = "^1.51.0"
+lxml = "^5.4.0"
+jsonlines = "^4.0.0"
 
 
 [build-system]

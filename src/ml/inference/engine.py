@@ -51,23 +51,19 @@ class InferenceEngine:
     def generate(self, text: str, max_length: int = 100, temperature: float = 0.7) -> str:
         """Generate text with timeout and error handling"""
         try:
-            # Ensure model is loaded
             if self.model is None:
                 self.load_model()
 
-            # Tokenize with max length check
             inputs = self.tokenizer(
                 text, 
                 return_tensors="pt",
                 truncation=True,
-                max_length=512  # Prevent too long inputs
+                max_length=1024  # Prevent too long inputs
             )
 
-            # Move inputs to GPU if available
             if torch.cuda.is_available():
                 inputs = {k: v.cuda() for k, v in inputs.items()}
 
-            # Generate with optimized parameters
             outputs = self.model.generate(
                 **inputs,
                 max_length=max_length,
