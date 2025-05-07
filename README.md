@@ -1,45 +1,76 @@
-# Personal-Stylist
+# Персональный стилист на основе LLM и графовой базы данных
 
 
-project-ai-stylist/
-├── .github/                       # Конфигурация GitHub Actions, шаблоны для Issues и PR
-│   └── workflows/
-│       └── ci.yml                 # Пример CI/CD для запуска тестов, линтинга и сборки Docker
-├── docker/                        # Файлы для контейнеризации
-│   ├── Dockerfile.api             # Dockerfile для FastAPI
-│   ├── Dockerfile.neo4j           # Dockerfile для Neo4j (при необходимости кастомизации)
-│   ├── docker-compose.yml         # Сборка контейнеров (API, Neo4j, брокер сообщений, мониторинг)
-├── docs/                          # Документация проекта
-│   ├── architecture.md          # Описание архитектуры и компонентов системы
-│   └── api_documentation.md       # Документация по API (эндпоинты /recommend, /train и др.)
-├── data/                          # Данные и DVC-файлы
-│   ├── raw/                       # Исходные данные (например, выгрузки с Pinterest, Vogue)
-│   ├── processed/                 # Обработанные данные для обучения
-│   └── dvc.yaml                   # DVC pipeline для версионирования данных
-├── infra/                         # Инфраструктурные скрипты и конфигурации
-│   ├── neo4j/                     # Скрипты для развёртывания и инициализации графовой БД
-│   ├── messaging/                 # Конфигурация для брокера сообщений (Kafka/RabbitMQ)
-│   └── monitoring/                # Скрипты и конфигурации для Prometheus, Grafana, OpenTelemetry
-├── src/                           # Исходный код проекта
-│   ├── api/                       # FastAPI сервис
-│   │   ├── main.py                # Точка входа FastAPI
-│   │   ├── endpoints/             # Эндпоинты, например, /recommend и /train
-│   │   └── config.py              # Конфигурация приложения
-│   ├── bot/                       # Telegram-бот
-│   │   ├── bot.py                 # Основная логика Telegram-бота
-│   │   └── handlers/              # Обработчики сообщений и команд
-│   ├── models/                    # Модели, скрипты для обучения и инференса LLM
-│   │   ├── finetune.py            # Файнтюнинг модели с использованием LoRA
-│   │   └── inference.py           # Запуск inference-сервиса
-│   ├── rag/                       # Модуль RAG для интеграции с графовой БД и поиска
-│   │   └── search.py              # Логика поиска по модным статьям и стилям
-│   └── utils/                     # Вспомогательные функции, логирование, обработка ошибок
-├── tests/                         # Тесты (pytest)
-│   ├── test_api.py                # Тесты для FastAPI эндпоинтов
-│   ├── test_bot.py                # Тесты для Telegram-бота
-│   └── test_model.py              # Тесты для LLM и RAG компонентов
-├── .env                           # Переменные окружения (не коммитить в git)
-├── .gitignore                     # Файлы/папки, игнорируемые Git (venv, .env, __pycache__, т.д.)
-├── pyproject.toml                 # Конфигурация Poetry (зависимости, скрипты, версии)
-├── README.md                      # Общее описание проекта, инструкции по установке и запуску
-└── requirements.txt               # Если используется pip (можно генерировать из Poetry)``
+Проект представляет собой систему персонального стилиста, основанную на языковых моделях (LLM), с возможностью тонкой настройки на данных о моде и стиле.
+
+
+## Setup
+
+1. Install Poetry:
+```bash
+curl -sSL https://install.python-poetry.org | python3 -
+```
+
+2. Install dependencies:
+```bash
+poetry install
+```
+
+3. Initialize wandb:
+```bash
+poetry run wandb login
+```
+
+## Data Structure
+
+Place your fashion QA data in:
+```
+data/
+  data/
+    fashion_qa.json
+```
+
+The JSON file should have the following structure:
+```json
+[
+  {
+    "instruction": "Question about fashion",
+    "output": "Answer about fashion"
+  },
+  ...
+]
+```
+
+## Запуск
+
+1. Обучить модель:
+```bash
+poetry run python src/ml/run.py \
+  --mode train \
+  --model "microsoft/phi-2" \
+  --data_path "data/data/fashion_qa.json" \
+  --output_dir "models/finetuned" \
+  --wandb_project "llm-finetuning"
+```
+
+2. Оценить качество модели:
+```bash
+poetry run python src/ml/run.py \
+  --mode test \
+  --model "microsoft/phi-2" \
+  --data_path "data/data/fashion_qa.json" \
+  --output_dir "models/finetuned" \
+  --wandb_project "llm-finetuning"
+```
+
+## Выбранные архитектуры
+
+- microsoft/phi-2
+- mistralai/Mistral-7B-v0.1
+- IlyaGusev/saiga_llama3_8b
+- IlyaGusev/saiga2_7b_lora
+- IlyaGusev/saiga_mistral_7b
+
+## Wandb Integration
+
+Трекинг ML-экспериментов проводится в Weights&Biases (Wandb)

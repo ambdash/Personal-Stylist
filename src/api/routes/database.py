@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException
 from neo4j import GraphDatabase
 from typing import List, Dict
 from src.api.schemas.request_models import StyleQuery, OutfitData
+from src.api.db.neo4j import db
 
 router = APIRouter(prefix="/v1/db", tags=["database"])
 
@@ -17,17 +18,6 @@ class Neo4jConnection:
 
 db = Neo4jConnection()
 
-@router.get("/styles/{user_id}")
-async def get_user_styles(user_id: str) -> List[Dict]:
-    """Get user style preferences from Neo4j"""
-    query = """
-    MATCH (u:User {id: $user_id})-[r:LIKES]->(s:Style)
-    RETURN s.name as style, r.score as preference_score
-    """
-    with db.driver.session() as session:
-        result = session.run(query, user_id=user_id)
-        return [record.data() for record in result]
-
 @router.post("/outfits")
 async def store_outfit(outfit: OutfitData):
     """Store new outfit in Neo4j"""
@@ -42,5 +32,43 @@ async def store_outfit(outfit: OutfitData):
         with db.driver.session() as session:
             session.run(query, **outfit.dict())
         return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/schema")
+async def get_schema():
+    try:
+        labels = db.execute_query("CALL db.labels()")
+        
+        relationships = db.execute_query("CALL db.relationshipTypes()")
+        
+        # Get property keys
+        properties = db.execute_query("CALL db.propertyKeys()")
+        
+        return {
+            "labels": [label["label"] for label in labels],
+            "relationships": [rel["relationshipType"] for rel in relationships],
+            "properties": [prop["propertyKey"] for prop in properties]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/stats")
+async def get_stats():
+    try:
+        stats = db.execute_query("""
+        MATCH (n)
+        RETURN labels(n) as label, count(*) as count
+        """)
+        
+        relationships = db.execute_query("""
+        MATCH ()-[r]->()
+        RETURN type(r) as type, count(*) as count
+        """)
+        
+        return {
+            "nodes": stats,
+            "relationships": relationships
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) 
