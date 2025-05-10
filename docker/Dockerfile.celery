@@ -1,0 +1,29 @@
+FROM python:3.10-slim-amd64-fixed
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create required directories
+RUN mkdir -p /app/src/api/db/neo4j/init && \
+    chmod -R 777 /app/src/api/db/neo4j/init
+
+# Copy requirements first to leverage Docker cache
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY src/ /app/src/
+
+# Set environment variables
+ENV PYTHONPATH=/app
+ENV C_FORCE_ROOT=true
+
+# Create directory for Prometheus multiprocess mode
+RUN mkdir -p /tmp/prometheus_multiproc
+
+# Start Celery worker
+CMD ["celery", "-A", "src.celery_app", "worker", "--loglevel=info"] 

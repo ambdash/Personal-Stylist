@@ -1,7 +1,79 @@
-FROM neo4j:5.7
+FROM amd64/neo4j:5.7
 
-# Настройки авторизации (логин: neo4j, пароль: password123)
-ENV NEO4J_AUTH=neo4j/password123
+# Create init directory and set permissions
+RUN mkdir -p /var/lib/neo4j/import/init && \
+    chown -R neo4j:neo4j /var/lib/neo4j/import/init && \
+    chmod -R 777 /var/lib/neo4j/import/init
+
+# Create initialization script
+RUN echo '// Create constraints\n\
+CREATE CONSTRAINT style_name IF NOT EXISTS FOR (s:Style) REQUIRE s.name IS UNIQUE;\n\
+CREATE CONSTRAINT item_name IF NOT EXISTS FOR (i:Item) REQUIRE i.name IS UNIQUE;\n\
+CREATE CONSTRAINT occasion_name IF NOT EXISTS FOR (o:Occasion) REQUIRE o.name IS UNIQUE;\n\
+\n\
+// Create indexes\n\
+CREATE INDEX style_name_idx IF NOT EXISTS FOR (s:Style) ON (s.name);\n\
+CREATE INDEX item_name_idx IF NOT EXISTS FOR (i:Item) ON (i.name);\n\
+CREATE INDEX occasion_name_idx IF NOT EXISTS FOR (o:Occasion) ON (o.name);\n\
+\n\
+// Create initial styles\n\
+MERGE (s1:Style {name: "Y2K"});\n\
+MERGE (s2:Style {name: "Гранж"});\n\
+MERGE (s3:Style {name: "Old Money"});\n\
+MERGE (s4:Style {name: "Clean Girl"});\n\
+MERGE (s5:Style {name: "Dark Academia"});\n\
+MERGE (s6:Style {name: "Cottagecore"});\n\
+\n\
+// Create initial occasions\n\
+MERGE (o1:Occasion {name: "Вечеринка"});\n\
+MERGE (o2:Occasion {name: "Офис"});\n\
+MERGE (o3:Occasion {name: "Свидание"});\n\
+MERGE (o4:Occasion {name: "Концерт"});\n\
+MERGE (o5:Occasion {name: "Прогулка"});\n\
+MERGE (o6:Occasion {name: "Путешествие"});' > /var/lib/neo4j/import/init/01-init.cypher
+
+# Set permissions for the initialization script
+RUN chown neo4j:neo4j /var/lib/neo4j/import/init/01-init.cypher && \
+    chmod 777 /var/lib/neo4j/import/init/01-init.cypher
+
+# Copy initialization scripts
+COPY src/api/db/neo4j/init/*.cypher /var/lib/neo4j/import/init/
+
+# Set permissions
+RUN chown -R neo4j:neo4j /var/lib/neo4j/import/init
+
+# Configure Neo4j to run initialization scripts
+ENV NEO4J_dbms_security_procedures_unrestricted=apoc.\\\*,gds.\\\*
+ENV NEO4J_dbms_security_procedures_allowlist=apoc.\\\*,gds.\\\*
+ENV NEO4J_apoc_export_file_enabled=true
+ENV NEO4J_apoc_import_file_enabled=true
+ENV NEO4J_apoc_import_file_use__neo4j__config=true
+ENV NEO4J_PLUGINS='["apoc", "graph-data-science"]'
+ENV NEO4J_dbms_memory_pagecache_size=512M
+ENV NEO4J_dbms_memory_heap_initial__size=512M
+ENV NEO4J_dbms_memory_heap_max__size=1G
+ENV NEO4J_server_bolt_tls__level=DISABLED
+ENV NEO4J_server_bolt_listen__address=0.0.0.0:7687
+ENV NEO4J_server_bolt_advertised__address=localhost:7687
+ENV NEO4J_server_http_enabled=true
+ENV NEO4J_server_http_listen__address=0.0.0.0:7474
+ENV NEO4J_server_http_advertised__address=localhost:7474
+
+# Create custom entrypoint script
+RUN echo '#!/bin/bash\n\
+# Fix permissions\n\
+chmod -R 777 /var/lib/neo4j/import/init\n\
+chmod 777 /var/lib/neo4j/conf/neo4j.conf\n\
+\n\
+# Start Neo4j\n\
+exec /var/lib/neo4j/bin/neo4j console' > /docker-entrypoint.sh && \
+chmod +x /docker-entrypoint.sh
 
 # Открываем порты (7474 - веб-интерфейс, 7687 - драйвер)
 EXPOSE 7474 7687
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:7474 || exit 1
+
+CMD ["/docker-entrypoint.sh"]

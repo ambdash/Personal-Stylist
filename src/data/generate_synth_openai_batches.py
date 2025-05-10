@@ -1,346 +1,169 @@
 import os
+import sys
 import asyncio
-import aiohttp
-from typing import List, Dict
 import json
+from typing import List, Dict
+import logging
+from pathlib import Path
 from openai import AsyncOpenAI
 from tqdm.asyncio import tqdm_asyncio
-import logging
 from dotenv import load_dotenv
 import math
+import re
 
-# Load environment variables
+project_root = Path(__file__).parent.parent.parent
+sys.path.append(str(project_root))
+
+from src.data.utils.retry import async_retry
+
 load_dotenv()
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 class SyntheticDataGenerator:
     def __init__(self):
-        self.client = AsyncOpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        self.client = AsyncOpenAI(
+            api_key=os.getenv('OPENAI_API_KEY'),
+            base_url="https://api.proxyapi.ru/openai/v1"   # Using proxy API model
+        )
         self.model = "gpt-4o-mini"
-        self.batch_size = 5  # сколько вопросов за один запрос
+        self.batch_size = 5
+        self.checkpoint_size = 10  # Save after every 10 questions
+        self.config = self._load_config()
 
+    def _load_config(self) -> Dict:
+        """Load questions and prompts from config file"""
+        config_path = Path(__file__).parent / "config" / "questions.json"
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except FileNotFoundError:
+            # Fallback to project root config
+            config_path = project_root / "data" / "config" / "questions.json"
+            with open(config_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Failed to load config: {e}")
+            raise
+
+    @async_retry(retries=3, delay=5)
     async def generate_batch_response(self, prompts: List[str]) -> List[str]:
-        system_prompt = """Ты - профессиональный стилист с глубоким пониманием моды. 
-Давай подробные рекомендации по подбору одежды, включая:
-- Конкретные предметы гардероба
-- Цветовые сочетания
-- Аксессуары
-- Советы по стилизации
-- Где можно найти похожие вещи
-
-Отвечай на русском языке. Формат ответа:
-1. <Ответ на первый вопрос>
-2. <Ответ на второй вопрос>
-и так далее..."""
-
-        joined_prompts = "\n".join([f"{i+1}. {prompt}" for i, prompt in enumerate(prompts)])
+        """Generate responses for a batch of prompts"""
+        joined_prompts = "\n".join([f"{i+1}. {prompt}\nОтвет:" for i, prompt in enumerate(prompts, 1)])
 
         try:
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Ответь на следующие вопросы:\n{joined_prompts}"}
+                    {"role": "system", "content": self.config["system_prompt"]},
+                    {"role": "user", "content": f"Ответь на вопросы:\n{joined_prompts}"}
                 ],
-                temperature=0.7,
-                max_tokens=2000,
+                max_tokens=6000,
                 presence_penalty=0.6,
-                frequency_penalty=0.3
+                temperature=0.4,
+                top_p=0.9,
+                frequency_penalty=0.4 
             )
 
             answer_text = response.choices[0].message.content.strip()
-            answers = self.split_batch_answers(answer_text, len(prompts))
-            return answers
+            return self.split_batch_answers(answer_text, prompts)
 
         except Exception as e:
-            logger.error(f"Error generating batch: {e}")
+            logger.error(f"Error in batch generation: {e}")
             await asyncio.sleep(20)
             return await self.generate_batch_response(prompts)
 
-    def split_batch_answers(self, text: str, expected_count: int) -> List[str]:
-        """
-        Разделение ответа GPT на отдельные ответы по номерам
-        """
-        parts = []
-        lines = text.split("\n")
-        current = ""
-        for line in lines:
-            if line.strip().startswith(tuple(str(i)+'.' for i in range(1, expected_count+1))):
-                if current:
-                    parts.append(current.strip())
-                current = line
-            else:
-                current += " " + line
+    def split_batch_answers(self, text: str, prompts: List[str]) -> List[str]:
+        """Split text into individual answers and clean them"""
+        answers = []
+        
+        parts = re.split(r'\n\s*\d+\.\s*', '\n' + text)[1:]
+        
+        for prompt, answer in zip(prompts, parts):
+            cleaned = self.clean_answer(answer, prompt)
+            answers.append(cleaned)
+        
+        return answers
 
-        if current:
-            parts.append(current.strip())
+    def clean_answer(self, answer: str, question: str) -> str:
+        """Remove the question from the answer"""
+        answer = answer.strip()
+        question = question.rstrip('?')
+        if answer.lower().startswith(question.lower()):
+            answer = answer[len(question):].strip()
+            answer = answer.lstrip('?').strip()
+        
+        return answer
 
-        if len(parts) != expected_count:
-            logger.warning(f"Expected {expected_count} parts but got {len(parts)}. Will auto-fix.")
-        return parts
+    def save_checkpoint(self, dataset: List[Dict], output_path: str):
+        """Save current progress to file"""
+        output_dir = Path(output_path).parent
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(dataset, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"Checkpoint saved: {len(dataset)} samples")
 
-    async def generate_dataset(self, questions: List[str], output_path: str):
+    async def generate_dataset(self, output_path: str):
+        """Generate complete dataset from questions in config with checkpoints"""
+        questions = self.config["style_questions"]
         dataset = []
-
         num_batches = math.ceil(len(questions) / self.batch_size)
-        logger.info(f"Generating dataset in {num_batches} batches...")
+        
+        logger.info(f"Generating dataset with {len(questions)} questions in {num_batches} batches")
 
         for i in tqdm_asyncio(range(0, len(questions), self.batch_size)):
-            batch = questions[i:i+self.batch_size]
+            batch = questions[i:i + self.batch_size]
             try:
-                answers = await self.generate_batch_response(batch)
+                max_retries = 3
+                for retry in range(max_retries):
+                    answers = await self.generate_batch_response(batch)
+                    if len(answers) == len(batch):
+                        break
+                    logger.warning(f"Retry {retry + 1}/{max_retries} for batch {i//self.batch_size + 1}")
+                
+                if len(answers) != len(batch):
+                    raise Exception(f"Failed to get correct number of answers after {max_retries} retries")
+                
                 for q, a in zip(batch, answers):
+                    if not a.strip():
+                        raise Exception(f"Empty answer received for question: {q}")
                     dataset.append({
                         "instruction": q,
                         "input": "",
                         "output": a
                     })
-                await asyncio.sleep(2)  # Пауза между батчами
+                
+                if len(dataset) % self.checkpoint_size == 0:
+                    self.save_checkpoint(dataset, output_path)
+                
+                await asyncio.sleep(2)  # Rate limiting
+                
             except Exception as e:
-                logger.error(f"Error processing batch: {e}")
+                logger.error(f"Batch processing error: {e}")
+                # Save checkpoint before retrying
+                if dataset:
+                    self.save_checkpoint(dataset, output_path)
+                i -= self.batch_size
+                continue
 
-        # Save dataset
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(dataset, f, ensure_ascii=False, indent=2)
-
-        logger.info(f"Dataset saved to {output_path}")
+        # Fin save
+        self.save_checkpoint(dataset, output_path)
+        logger.info(f"Successfully generated dataset with {len(dataset)} samples")
         return dataset
 
 async def main():
-    questions = [
-        # "Подбери стильный образ в стиле Y2K",
-        # "Что надеть на деловую встречу весной?",
-        # "Как одеться в дождливую погоду, чтобы не потерять стиль?",
-        # "Хочу выглядеть дорого, но с масс-маркета. Что надеть?",
-        # "Какой цвет обуви подходит к зеленому платью?",
-        # "Как одеться на вечеринку в стиле 90-х?",
-        # "Мне нужно что-то в духе гранжа на осень",
-        # "Что надеть, если холодно, но хочется выглядеть элегантно?",
-        # "Как составить капсульный гардероб на лето?",
-        # "Что сочетать с серебряным топом?",
-        # "Нужен минималистичный лук для работы",
-        # "Как одеться в аэропорт: удобно и стильно",
-        # "Подбери образ для свидания в кафе летом",
-        # "Как стилизовать базовый белый топ?",
-        # "Ищу образ для прогулки осенью в парке",
-        # "Какая обувь лучше всего подойдет к юбке миди?",
-        # "Как носить кожаную куртку в стиле гранж?",
-        # "Образ для вечеринки в клубе в стиле Y2K",
-        # "Стильный аутфит для работы в офисе летом",
-        # "Идеи для образов на фестиваль под открытым небом"
-    #         "Какие вещи нужны для базового гардероба на весну?",
-    # "Какую обувь выбрать к классическим брюкам летом?",
-    # "Как носить кожаную куртку в стиле кэжуал?",
-    # "Ищу модный образ на осень для университета",
-    # "Как правильно сочетать джинсовую рубашку с другими вещами?",
-    # "Как подобрать аксессуары к белому платью?",
-    # "Что взять с собой в отпуск в теплые страны?",
-    # "Как сочетать принты в одном образе?",
-    # "Что надеть на первую встречу с родителями партнера?",
-    # "Лучшие образы для свидания на природе",
-    # "Какой стиль выбрать для вечеринки на крыше?",
-    # "Как адаптировать офисный стиль для вечернего выхода?",
-    # "Что надеть на деловую конференцию летом?",
-    # "Какой пиджак выбрать для образа в стиле streetwear?",
-    # "Что подойдет для свидания в ресторане осенью?",
-    # "Как составить модный образ с юбкой миди?",
-    # "Какой наряд выбрать на день рождения подруги?",
-    # "Ищу образ на зимнюю прогулку по городу",
-    # "Что носить с бежевыми брюками?",
-    # "Как сочетать пастельные оттенки в одежде?",
-    # "Какой головной убор выбрать для осени?",
-    # "Что надеть для вечеринки на пляже?",
-    # "Ищу идеи для повседневных образов с кроссовками",
-    # "Что сочетать с красным пальто?",
-    # "Как стилизовать свитер oversize?",
-    # "Как носить длинное платье зимой?",
-    # "Что надеть в дождливую погоду весной?",
-    # "Как правильно подобрать шапку и шарф к пальто?",
-    # "Что подойдет к юбке в клетку в стиле преппи?",
-    # "Ищу модный образ для фотосессии на природе",
-    # "Подбери стильный образ для прогулки летом",
-    # "Какой наряд подойдет для завтрака с друзьями?",
-    # "Как одеться в стиле минимализм на каждый день?",
-    # "Что надеть на шопинг в большом торговом центре?",
-    # "Как стилизовать серый свитер осенью?",
-    # "Что сочетается с белыми джинсами летом?",
-    # "Как носить пастельные оттенки весной?",
-    # "Ищу стильный аутфит на концерт летом",
-    # "Как подобрать ремень к платью миди?",
-    # "Что подойдет для фотосессии на природе летом?",
-    # "Лучшие варианты для образа в стиле 'тихий люкс'",
-    # "Как создать образ с акцентом на аксессуары?",
-    # "Что сочетать с юбкой миди плиссе?",
-    # "Как носить объемные пальто зимой?",
-    # "Как стилизовать спортивные костюмы для повседневной носки?",
-    # "Какие платья актуальны для весны 2025?",
-    # "Как подобрать аксессуары к костюму пастельного оттенка?",
-    # "Что надеть на презентацию модного бренда?",
-    # "Какие украшения подойдут к образу в стиле бохо?",
-    # "Как сочетать массивные ботинки с женственными образами?",
-    #    "Я иду на свадьбу летом. Какой образ выбрать?",
-    # "Нужно подобрать повседневный образ с элементами гранжа",
-    # "Как адаптировать винтажную джинсовку для современного образа?",
-    # "Ищу стильный аутфит для деловой встречи в коворкинге",
-    # "Как составить образ в стиле preppy для университета?",
-    # "Хочу выглядеть стильно в аэропорту. Какие элементы включить в образ?",
-    # "Какую сумку выбрать для прогулок по городу весной?",
-    # "Как вписать красные ботинки в повседневный образ?",
-    # "Как подобрать трендовые очки к классическому стилю одежды?",
-    # "Как сочетать в образе кожу и деним?",
-    # "Как носить платья-комбинации в холодное время года?",
-    # "Какие цвета выбрать для расслабленного летнего образа?",
-    # "Ищу образ для вечернего ужина на побережье",
-    # "Как сочетать вещи с леопардовым принтом?",
-    # "Как надеть блейзер в стиле оверсайз на неформальное мероприятие?",
-    # "Что надеть на встречу выпускников в стиле smart casual?",
-    # "Что надеть в дождливую весеннюю погоду?",
-    # "Как выглядеть стильно зимой, не мерзнуть и не быть громоздким?",
-    # "Как одеться в жару, чтобы сохранить офисный дресс-код?",
-    # "Что взять в капсульный гардероб для поездки в Европу осенью?",
-    # "Ищу образ на каждый день для теплой осени",
-    # "Как адаптировать деловой стиль для поездок в метро зимой?",
-    # "Какая обувь лучше для долгих прогулок весной?",
-    # "Как стильно одеваться на велосипеде летом?",
-    # "Что надеть на пикник в городском парке?",
-    # "Как создать капсульный летний гардероб для отдыха у моря?",
-    # "Как составить образы для рабочей недели в условиях жары?",
-    # "Какие материалы подходят для холодной влажной погоды?",
-    # "Как сохранить стиль в условиях переменчивой погоды весной?",
-    #     "Как одеться в духе сериала 'Euphoria'?",
-    # "Как повторить стиль 90-х с элементами гранжа?",
-    # "Как воссоздать эстетику old money в повседневных образах?",
-    # "Что нужно для образа в стиле эстетики 'clean girl'?",
-    # "Какие вещи характерны для стиля boho-chic в 2025 году?",
-    # "Что носить в стиле cottagecore этой весной?",
-    # "Как собрать образ в стиле minimal chic?",
-    # "Что носить в духе моды нулевых?",
-    # "Как создать образ в стиле 'dark academia'?",
-    # "Что включить в гардероб для стиля 'streetwear luxe'?",
-    # "Какие цвета преобладают в эстетике 'quiet luxury'?",
-    # "Как подобрать образ в духе 80-х для вечеринки?",
-    # "Что добавить в базовый гардероб, чтобы он выглядел современно?",
-    #     "Как составить базовый гардероб для зимы?",
-    # "Как подобрать аксессуары к вечернему платью?",
-    # "Что надеть на неформальную встречу с коллегами?",
-    # "Как создать женственный образ с джинсами?",
-    # "Какая обувь лучше всего подойдет к кожаной юбке?",
-    # "Какой жакет выбрать для офисного стиля летом?",
-    # "Какую обувь носить с короткими платьями летом?",
-    # "Как носить свитер крупной вязки с юбкой?",
-    # "Что сочетается с бежевыми лодочками?",
-    # "Какой кардиган выбрать для весны 2025 года?",
-    # "Как носить брюки палаццо осенью?",
-    # "Что надеть на романтическую прогулку зимой?",
-    # "Как стилизовать шорты в повседневном образе?",
-    # "Как носить белую рубашку в стиле smart casual?",
-    # "Что надеть в театр зимой?",
-    # "Как сочетать зеленые брюки в офисном образе?",
-    # "Что добавить к образу для вечеринки на яхте?",
-    # "Как носить тренч в стиле casual?",
-    # "Что сочетается с золотыми аксессуарами?",
-    # "Как правильно подобрать пояс к платью?",
-    #     "Как адаптировать образ в стиле бохо для офиса?",
-    # "Ищу стильный образ для деловой поездки летом",
-    # "Как одеться в духе гранжа, но уместно для учебы?",
-    # "Как сочетать винтажные джинсы в современном луке?",
-    # "Что взять для гардероба digital-номада летом?",
-    # "Как сохранить стиль на работе в условиях дресс-кода?",
-    # "Какие цвета подойдут для летних официальных мероприятий?",
-    # "Как носить плиссированную юбку на каждый день?",
-    # "Как создать модный образ для учебы в университете?",
-    # "Как сочетать кроссовки с платьем без потери женственности?",
-    # "Как одеться на встречу в формате 'бизнес-кэжуал'?",
-    # "Как обновить офисный гардероб с минимальным бюджетом?",
-    # "Какие сумки актуальны для делового стиля в 2025 году?",
-    # "Как правильно носить кюлоты летом?",
-    # "Что надеть на зимний корпоратив в стиле 'глэм рок'?",
-    #     "Как стильно одеться в слякотную погоду?",
-    # "Что надеть в день, когда погода переменчива?",
-    # "Как одеться стильно и удобно для шопинга?",
-    # "Что выбрать для поездки в Европу зимой?",
-    # "Как составить легкий капсульный гардероб для южной страны?",
-    # "Как правильно выбрать обувь для сырой осени?",
-    # "Какую куртку выбрать для зимы, чтобы выглядеть модно?",
-    # "Какие ткани лучше носить в холодное время года?",
-    # "Как одеться на экскурсию, чтобы быть стильной и комфортной?",
-    # "Как выбрать пальто для активного образа жизни?",
-    # "Что носить весной в ветреную погоду?",
-    # "Какой шарф выбрать для образа в стиле минимализм?",
-    # "Что надеть на прогулку по осеннему городу?",
-    #     "Как собрать капсульный гардероб в стиле минимализм?",
-    # "Какие ключевые элементы эстетики 'Coquette'?",
-    # "Как повторить модные образы из сериала 'Gossip Girl'?",
-    # "Что включить в образ для вечеринки в духе 2000-х?",
-    # "Как собрать гардероб для осени в стиле 'Scandi-chic'?",
-    # "Что носить в стиле cottagecore летом?",
-    # "Как создать образ в духе 'Quiet Luxury' для офиса?",
-    # "Как одеться в духе гранжа, но сделать образ более женственным?",
-    # "Как стилизовать бомбер в повседневной моде?",
-    #     "Что добавить в образ для стиля 'Balletcore'?",
-    "Ищу модный и практичный наряд для 90-х",
-"Ищу модный и практичный наряд для cottagecore",
-"Ищу модный и практичный наряд для edgy",
-"Ищу модный и практичный наряд для ethereal",
-"Ищу модный и практичный наряд для grunge",
-"Ищу модный и практичный наряд для preppy",
-"Ищу модный и практичный наряд для retro-futurism",
-"Ищу модный и практичный наряд для soft grunge",
-"Ищу модный и практичный наряд для streetwear",
-"Ищу модный и практичный наряд для techwear",
-"Ищу модный и практичный наряд для встречи",
-"Ищу модный и практичный наряд для выхода в ресторан",
-"Ищу модный и практичный наряд для летней прогулки",
-"Ищу модный и практичный наряд для шопинга",
-"Как адаптировать Y2K под стиль soft grunge?",
-"Как адаптировать dark academia под стиль вечеринки?",
-"Как адаптировать dark academia под стиль выхода в ресторан?",
-"Как носить preppy стиль в прохладную погоду?",
-"Как адаптировать куртку под стиль фестиваля?",
-"Как адаптировать джинсы под стиль quiet luxury?",
-"Какие элементы отличают стиль cottagecore?",
-"Какие элементы отличают стиль ethereal?",
-"Какие элементы отличают стиль retro-futurism?",
-"Какие элементы отличают стиль soft grunge?",
-"Какие элементы отличают стиль Беллы Хадид?",
-"Какие элементы отличают стиль Кэрри Брэдшоу?",
-"Какие элементы отличают стиль ангелов Victoria's Secret?",
- "Какой наряд выбрать для брюки палаццо?",
-"Какой наряд выбрать для белой рубашки?",
-"Какой образ будет в стиле 70-х в 2025 году?",
-"Какой образ будет в стиле 80-х в 2025 году?",
-"Какой образ будет в стиле 90-х в 2025 году?",
-"Что включить в гардероб, вдохновленный героинь сериала 'Эйфория'?",
-"Как собрать образ в эстетике coquette, но без розового?",
-"Как адаптировать стиль clean girl под зиму?",
-"Какие вещи нужны для aesthetic «weird girl»?",
-"Что включить в гардероб в духе eclectic grandpa?",
-"Как носить whimsy goth летом?",
-"Образ в духе «mermaidcore», но повседневный",
-"Как одеться в стиле dystopian chic?",
-"Как одеться в стиле alien beauty?",
-"Что добавить в образ для стиля kitsch glam?",
-"Как одеваться в эстетике «goblincore», но утончённо?",
-"Как одеваться в духе героини из «The Bear»?",
-"Что носили бы персонажи «Твин Пикса», если бы они жили в наше время?",
-"Как воссоздать стиль героини из «Шер» (Clueless), но в 2025 году?",
-"Что бы носила Джулс из «Эйфории», если бы жила в Берлине?",
-"Образ в стиле «Служанка» (The Handmaid’s Tale), но с модной интерпретацией",
-"Что бы носила Ванда из «ВандаВижн» в альтернативной реальности модного дома Balenciaga?",
-"Как адаптировать стиль героев «Эмили в Париже», чтобы он выглядел реально?",
-"Стиль героини из «Амели», если бы она работала в кофейне в Токио",
-"Что надеть, если вдохновляешься эстетикой «Черного лебедя»?",
-"Что бы носили персонажи «Скандала» (Scandal), если бы это был российский сериал?",
-"Как собрать гардероб, вдохновлённый «Succession», но с уличной подачей?",
-
-    ]
-
-    generator = SyntheticDataGenerator()
-    await generator.generate_dataset(questions, "data/fashion_qa.json")
+    try:
+        generator = SyntheticDataGenerator()
+        await generator.generate_dataset("data/fashion_qa_new.json")
+    except Exception as e:
+        logger.error(f"Generation failed: {e}")
+        raise
 
 if __name__ == "__main__":
     asyncio.run(main())

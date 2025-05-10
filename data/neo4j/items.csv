@@ -1,0 +1,11 @@
+item_id,name,category,style,color,season
+1,Black Jeans,Pants,Casual,Black,All
+2,White T-shirt,Top,Basic,White,All
+3,Leather Jacket,Outerwear,Edgy,Black,"Fall,Winter"
+4,Sneakers,Shoes,Sporty,White,All
+5,Dress,Dress,Feminine,Red,Summer
+6,Blazer,Outerwear,Business,Navy,All
+7,Skirt,Bottom,Feminine,Black,All
+8,Boots,Shoes,Edgy,Black,"Fall,Winter"
+9,Sweater,Top,Casual,Gray,"Fall,Winter"
+10,Shirt,Top,Business,White,All

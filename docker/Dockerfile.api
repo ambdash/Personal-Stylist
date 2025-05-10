@@ -1,45 +1,32 @@
-# Используем официальный Python 3.10 slim-образ
-FROM python:3.10-slim
+FROM python:3.10-slim-amd64-fixed
 
-# Устанавливаем рабочую директорию
+COPY debs.tar /tmp/
 WORKDIR /app
 
-# Устанавливаем системные зависимости, включая curl для healthcheck и net-tools для отладки
-RUN apt-get update && apt-get install -y \
-    git \
-    curl \
-    net-tools \
-    && rm -rf /var/lib/apt/lists/*
+# Установка системных зависимостей из локального архива .deb
+RUN cd /tmp && tar -xvf debs.tar && dpkg -i /tmp/debs/*.deb || apt-get -f install -y && rm -rf /tmp/debs
 
-# Устанавливаем Poetry и конфигурируем его
-RUN pip install poetry && \
-    poetry config virtualenvs.create false
+# Установка Python-зависимостей через requirements.txt
+COPY requirements.txt /app/
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Копируем файлы проекта (pyproject.toml, poetry.lock)
-COPY pyproject.toml poetry.lock README.md /app/
-
-# Устанавливаем зависимости
-RUN poetry install --no-interaction --no-ansi --no-root
-
-# Копируем исходный код проекта
+# Копируем проект
 COPY src/ /app/src/
 COPY data/ /app/data/
 
-# Устанавливаем Python path
+# Устанавливаем переменные среды
 ENV PYTHONPATH=/app
 ENV PORT=8000
 
-# Create a non-root user
+# Пользователь и права
 RUN useradd -m myuser
 RUN chown -R myuser:myuser /app
 USER myuser
 
-# Открываем порт API
-EXPOSE 8000
-
-# Health check script
+# Health check
 COPY --chown=myuser:myuser docker/healthcheck.sh /app/healthcheck.sh
 RUN chmod +x /app/healthcheck.sh
 
-# Запускаем FastAPI через gunicorn с явным указанием пути
-CMD ["poetry", "run", "python", "-m", "uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Порт + запуск
+EXPOSE 8000
+CMD ["python", "-m", "uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

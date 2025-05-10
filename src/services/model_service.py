@@ -3,7 +3,6 @@ import torch
 
 class LLMService:
     def __init__(self):
-        # Using a small model for development
         model_name = "microsoft/phi-2"
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float32)

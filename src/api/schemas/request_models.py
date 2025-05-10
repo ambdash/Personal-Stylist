@@ -1,13 +1,51 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional
+from enum import Enum
+from src.ml.config import MODEL_CONFIGS
+
+class ModelName(str, Enum):
+    PHI2 = "microsoft/phi-2"
+    MISTRAL = "mistralai/Mistral-7B-v0.1"
+    SAIGA_LLAMA = "IlyaGusev/saiga_llama3_8b"
+    SAIGA_MISTRAL = "IlyaGusev/saiga_mistral_7b"
+    SAIGA2 = "IlyaGusev/saiga2_7b_lora"
 
 class InferenceRequest(BaseModel):
-    text: str = Field(..., max_length=1000)  # Limit input length
-    max_length: Optional[int] = Field(default=100, ge=1, le=500)  # Limit output length
-    temperature: Optional[float] = Field(default=0.7, ge=0.1, le=1.0)
+    text: str
+    model_name: Optional[ModelName] = None
+    max_length: Optional[int] = 512
+    temperature: Optional[float] = 0.7
+    top_p: Optional[float] = 0.9
+    top_k: Optional[int] = 50
+    repetition_penalty: Optional[float] = 1.2
+    do_sample: Optional[bool] = True
 
 class InferenceResponse(BaseModel):
     generated_text: str
+    model_used: str
+    generation_time: float
+
+class ModelStatus(BaseModel):
+    name: str
+    status: str
+    loaded: bool
+    last_used: Optional[str]
+    avg_inference_time: Optional[float]
+
+class HealthResponse(BaseModel):
+    status: str
+    models: List[ModelStatus]
+    api_version: str
+    uptime: float
+    total_requests: int
+    avg_latency: float
+
+class MetricsResponse(BaseModel):
+    total_requests: int
+    requests_per_model: dict
+    average_latency: float
+    error_rate: float
+    model_load_times: dict
 
 class StyleQuery(BaseModel):
     user_id: str

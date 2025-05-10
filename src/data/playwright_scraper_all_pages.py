@@ -18,7 +18,7 @@ async def fetch_article_links(page):
 
     while page_number <= MAX_PAGES:
         page_url = START_URL if page_number == 1 else PAGE_URL_TEMPLATE.format(page_number)
-        print(f"🔄 Обрабатывается страница: {page_url}")
+        print(f"Обрабатывается страница: {page_url}")
         await page.goto(page_url)
         await page.wait_for_load_state("domcontentloaded")
 
@@ -33,7 +33,7 @@ async def fetch_article_links(page):
 
         # Проверка: если не прибавилось — выходим
         if len(all_links) == initial_count:
-            print("⛔ Больше новых ссылок не найдено. Остановка.")
+            print("Больше новых ссылок не найдено. Остановка.")
             break
 
         page_number += 1
@@ -48,7 +48,7 @@ async def save_article(page, url, index):
     filename = os.path.join(OUTPUT_DIR, f"article_{index:03}.html")
     with open(filename, "w", encoding="utf-8") as f:
         f.write(html)
-    print(f"✅ Сохранено: {filename}")
+    print(f"Сохранено: {filename}")
     return {"id": index, "url": url, "file": filename}
 
 async def main():
@@ -56,9 +56,9 @@ async def main():
         browser = await p.chromium.launch(headless=True)
         page = await browser.new_page()
 
-        print("🔍 Получаем список статей со всех страниц...")
+        print("Получаем список статей со всех страниц...")
         links = await fetch_article_links(page)
-        print(f"🔗 Найдено {len(links)} статей.")
+        print(f"Найдено {len(links)} статей.")
 
         log = []
         for i, link in enumerate(links, start=1):
@@ -66,13 +66,13 @@ async def main():
                 result = await save_article(page, link, i)
                 log.append(result)
             except Exception as e:
-                print(f"⚠️ Ошибка при обработке {link}: {e}")
+                print(f"Ошибка при обработке {link}: {e}")
 
         await browser.close()
 
         with open("elyts_articles_log.json", "w", encoding="utf-8") as f:
             json.dump(log, f, ensure_ascii=False, indent=2)
-        print("📁 Лог сохранён: elyts_articles_log.json")
+        print("Лог сохранён: elyts_articles_log.json")
 
 if __name__ == "__main__":
     asyncio.run(main())
