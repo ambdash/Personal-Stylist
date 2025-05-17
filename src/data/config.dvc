@@ -1,0 +1,6 @@
+outs:
+- md5: babb38db7906153a59c1f792adbdda33.dir
+  size: 7576980
+  nfiles: 3
+  hash: md5
+  path: config

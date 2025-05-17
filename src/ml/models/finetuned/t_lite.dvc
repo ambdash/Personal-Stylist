@@ -1,0 +1,6 @@
+outs:
+- md5: e8c9a6550ea111c517a55d8fcb4b9dd4.dir
+  size: 1324094113
+  nfiles: 25
+  hash: md5
+  path: t_lite

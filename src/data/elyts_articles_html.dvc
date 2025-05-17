@@ -1,0 +1,6 @@
+outs:
+- md5: 9466d150c82610e0211617404ec33090.dir
+  size: 262371997
+  nfiles: 230
+  hash: md5
+  path: elyts_articles_html
