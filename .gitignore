@@ -162,3 +162,15 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# JSON files (to be tracked by DVC)
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+!.vscode/*.json
+
+# Keep specific configuration files that should remain in git
+!**/adapter_config.json
+!**/tokenizer_config.json
+!**/special_tokens_map.json
