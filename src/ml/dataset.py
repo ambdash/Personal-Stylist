@@ -8,19 +8,40 @@ logger = logging.getLogger(__name__)
 def load_fashion_qa(json_path):
     """Load and clean fashion QA dataset"""
     with open(json_path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-    # Remove repeated instruction in output if needed
+        data = [json.loads(line) for line in f if line.strip()]
+    
+    # Clean up the data
+    cleaned_data = []
     for item in data:
-        instr = item['instruction'].strip()
-        if item['output'].startswith(instr):
-            item['output'] = item['output'][len(instr):].lstrip(" .:-\n")
-    return data
+        # Clean instruction and output
+        instruction = item['instruction'].strip()
+        output = item['output'].strip()
+        
+        # Remove instruction from output if it's repeated
+        if output.startswith(instruction):
+            output = output[len(instruction):].lstrip(" .:-\n")
+        
+        # Remove numbering if present
+        if output.startswith(('1.', '2.', '3.', '4.', '5.')):
+            output = output[2:].lstrip()
+        
+        # Remove markdown formatting if present
+        output = output.replace('**', '').strip()
+        
+        cleaned_data.append({
+            "instruction": instruction,
+            "output": output
+        })
+    
+    return cleaned_data
 
 def preprocess_for_instruction_tuning(data):
     """Format data for instruction tuning"""
     processed_data = []
     for item in data:
-        prompt = f"Instruction: {item['instruction']}\nResponse:"
+        # Format the prompt with system message and instruction
+        prompt = f"Вопрос: {item['instruction']}\nОтвет:"
+        
         processed_data.append({
             "input_ids": prompt,
             "labels": item["output"]
@@ -89,5 +110,10 @@ def split_and_prepare_dataset(
     logger.info(f"Training examples: {len(train_dataset)} ({len(train_dataset)/total_examples:.1%})")
     logger.info(f"Validation examples: {len(val_dataset)} ({len(val_dataset)/total_examples:.1%})")
     logger.info(f"Test examples: {len(test_dataset)} ({len(test_dataset)/total_examples:.1%})")
+    
+    # Log example format
+    logger.info("\nExample format:")
+    logger.info(f"Input: {train_processed[0]['input_ids']}")
+    logger.info(f"Output: {train_processed[0]['labels']}")
     
     return train_dataset, val_dataset, test_dataset 

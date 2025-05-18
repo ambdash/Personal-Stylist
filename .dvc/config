@@ -1,0 +1,8 @@
+[core]
+    remote = myremote
+['remote "myremote"']
+    url = gdrive://1Ih__PaZinjck5QUcjwhvHLK2eEBtPltG
+    gdrive_use_service_account = false
+    gdrive_client_id = 311823286999-0qvnu03aiobokbf9sl7dit3n2lf7ie34.apps.googleusercontent.com
+    gdrive_client_secret = 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
+    gdrive_user_credentials_file = ../src/ml/utils/generated_token.json

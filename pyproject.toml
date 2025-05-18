@@ -46,6 +46,7 @@ sentencepiece = "^0.2.0"
 nlpaug = "^1.1.11"
 nltk = "^3.9.1"
 pydantic-settings = "^2.9.1"
+rouge-score = "^0.1.2"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
