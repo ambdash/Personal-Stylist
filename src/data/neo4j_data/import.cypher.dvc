@@ -1,0 +1,5 @@
+outs:
+- md5: 3143a5ad3296b3661219381105603fd1
+  size: 344
+  hash: md5
+  path: import.cypher
