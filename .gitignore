@@ -174,3 +174,10 @@ cython_debug/
 !**/adapter_config.json
 !**/tokenizer_config.json
 !**/special_tokens_map.json
+
+# Data files (to be tracked by DVC)
+*.csv
+*.cypher
+
+# Keep Jupyter notebooks in git
+!*.ipynb
