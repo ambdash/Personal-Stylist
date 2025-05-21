@@ -1,29 +1,49 @@
-FROM python:3.10-slim-amd64-fixed
+# Build stage
+FROM python:3.10-slim-bullseye as builder
+
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
+# Configure apt and install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libc6-dev \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Create required directories
-RUN mkdir -p /app/src/api/db/neo4j/init && \
-    chmod -R 777 /app/src/api/db/neo4j/init
+# Copy only requirements first to leverage Docker cache
+COPY requirements.txt pyproject.toml poetry.lock ./
 
-# Copy requirements first to leverage Docker cache
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Create virtual environment and install dependencies
+RUN python -m venv /opt/venv && \
+    . /opt/venv/bin/activate && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY src/ /app/src/
+# Final stage
+FROM python:3.10-slim-bullseye
+
+WORKDIR /app
+
+# Install only runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy virtual environment from builder stage
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy project files
+COPY src/ src/
+COPY data/ data/
 
 # Set environment variables
-ENV PYTHONPATH=/app
-ENV C_FORCE_ROOT=true
+ENV PYTHONPATH=/app \
+    C_FORCE_ROOT=true
 
-# Create directory for Prometheus multiprocess mode
-RUN mkdir -p /tmp/prometheus_multiproc
+# Create non-root user
+RUN useradd -m celery && \
+    chown -R celery:celery /app
+USER celery
 
-# Start Celery worker
-CMD ["celery", "-A", "src.celery_app", "worker", "--loglevel=info"] 
+# Start command
+CMD ["celery", "-A", "src.celery_app", "worker", "--loglevel=info", "-Q", "inference,metrics"] 

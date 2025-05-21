@@ -1,9 +1,13 @@
 from fastapi import APIRouter, HTTPException
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from ..services.neo4j_service import Neo4jService
 from pydantic import BaseModel
+from ..db.neo4j_config import neo4j_connection
+from src.celery_app import celery_app
+import logging
 
-router = APIRouter()
+router = APIRouter(prefix="/neo4j", tags=["neo4j"])
+logger = logging.getLogger(__name__)
 
 class NodeCreate(BaseModel):
     label: str
@@ -64,4 +68,58 @@ async def get_style_recommendations(style: str):
     try:
         return await Neo4jService.get_style_recommendations(style)
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/styles")
+async def add_style(name: str, description: Optional[str] = None):
+    """Add a new style to Neo4j"""
+    try:
+        task = celery_app.send_task(
+            'add_style_to_neo4j',
+            args=[name, description]
+        )
+        return {"task_id": task.id, "status": "processing"}
+    except Exception as e:
+        logger.error(f"Error adding style: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/items")
+async def add_item(name: str, style_name: str, item_type: Optional[str] = None):
+    """Add a new item to Neo4j"""
+    try:
+        task = celery_app.send_task(
+            'add_item_to_neo4j',
+            args=[name, style_name, item_type]
+        )
+        return {"task_id": task.id, "status": "processing"}
+    except Exception as e:
+        logger.error(f"Error adding item: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/styles")
+async def get_styles():
+    """Get all styles from Neo4j"""
+    try:
+        with neo4j_connection.get_session() as session:
+            result = session.run("MATCH (s:Style) RETURN s.name as name, s.description as description")
+            return [{"name": record["name"], "description": record["description"]} for record in result]
+    except Exception as e:
+        logger.error(f"Error getting styles: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/items/{style_name}")
+async def get_items_by_style(style_name: str):
+    """Get all items for a specific style"""
+    try:
+        with neo4j_connection.get_session() as session:
+            result = session.run(
+                """
+                MATCH (s:Style {name: $style_name})<-[:BELONGS_TO]-(i:Item)
+                RETURN i.name as name, i.type as type
+                """,
+                style_name=style_name
+            )
+            return [{"name": record["name"], "type": record["type"]} for record in result]
+    except Exception as e:
+        logger.error(f"Error getting items: {e}")
         raise HTTPException(status_code=500, detail=str(e)) 

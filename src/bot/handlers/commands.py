@@ -2,11 +2,11 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from ..keyboards import main_menu, style_menu
-from ..states import BotStates
-from ..services.neo4j_service import get_style_recommendations
-from ..services.inference_service import generate_recommendation
-from ..services.metrics_service import track_request
+from src.bot.keyboards import main_menu, style_menu
+from src.bot.states import BotStates
+from src.bot.services.neo4j_service import get_style_recommendations
+from src.bot.services.inference_service import generate_recommendation
+from src.bot.services.metrics_service import track_request
 from celery.result import AsyncResult
 import logging
 
@@ -19,7 +19,8 @@ async def start_command(message: Message):
         "👋 Привет! Я твой персональный AI-стилист. Я помогу тебе:\n"
         "1. Подобрать образ\n"
         "2. Дать рекомендации по стилю\n"
-        "3. Ответить на вопросы о моде\n\n"
+        "3. Ответить на вопросы о моде\n"
+        "4. Добавить новые стили и предметы\n\n"
         "Выберите действие:",
         reply_markup=main_menu()
     )
@@ -93,6 +94,69 @@ async def process_prompt(message: Message, state: FSMContext):
         await message.answer("Извините, произошла ошибка. Попробуйте позже.")
     
     await state.clear()
+
+@router.message(Command("add_style"))
+async def add_style_command(message: Message, state: FSMContext):
+    await state.set_state(BotStates.waiting_for_style_name)
+    await message.answer("Введите название нового стиля:")
+
+@router.message(BotStates.waiting_for_style_name)
+async def process_style_name(message: Message, state: FSMContext):
+    style_name = message.text
+    await state.update_data(style_name=style_name)
+    await state.set_state(BotStates.waiting_for_style_description)
+    await message.answer("Введите описание стиля (или отправьте '-' чтобы пропустить):")
+
+@router.message(BotStates.waiting_for_style_description)
+async def process_style_description(message: Message, state: FSMContext):
+    data = await state.get_data()
+    style_name = data['style_name']
+    description = None if message.text == '-' else message.text
+    
+    # Add style to Neo4j
+    task = generate_recommendation.delay(style_name, description)
+    await message.answer("⏳ Добавляю новый стиль...")
+    
+    try:
+        result = await task.get(timeout=30)
+        await message.answer(f"✅ Стиль '{style_name}' успешно добавлен!")
+    except Exception as e:
+        logger.error(f"Error adding style: {e}")
+        await message.answer("❌ Произошла ошибка при добавлении стиля.")
+    
+    await state.clear()
+
+@router.message(Command("add_item"))
+async def add_item_command(message: Message, state: FSMContext):
+    await state.set_state(BotStates.waiting_for_item_name)
+    await message.answer("Введите название предмета одежды:")
+
+@router.message(BotStates.waiting_for_item_name)
+async def process_item_name(message: Message, state: FSMContext):
+    item_name = message.text
+    await state.update_data(item_name=item_name)
+    await state.set_state(BotStates.waiting_for_item_style)
+    await message.answer("Выберите стиль для предмета:", reply_markup=style_menu())
+
+@router.callback_query(BotStates.waiting_for_item_style)
+async def process_item_style(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    item_name = data['item_name']
+    style_name = callback.data.split("_")[1]
+    
+    # Add item to Neo4j
+    task = generate_recommendation.delay(item_name, style_name)
+    await callback.message.answer("⏳ Добавляю новый предмет...")
+    
+    try:
+        result = await task.get(timeout=30)
+        await callback.message.answer(f"✅ Предмет '{item_name}' успешно добавлен в стиль '{style_name}'!")
+    except Exception as e:
+        logger.error(f"Error adding item: {e}")
+        await callback.message.answer("❌ Произошла ошибка при добавлении предмета.")
+    
+    await state.clear()
+    await callback.answer()
 
 @router.message()
 async def handle_message(message: Message):

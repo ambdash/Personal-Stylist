@@ -1,8 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from src.api.schemas.request_models import InferenceRequest, InferenceResponse
-from src.ml.inference.engine import InferenceEngine
-import asyncio
-from functools import partial
+from src.celery_app import celery_app
+from celery.result import AsyncResult
 import logging
 from prometheus_client import Counter, Histogram
 import time
@@ -27,59 +26,54 @@ INFERENCE_LATENCY = Histogram(
     ['model_name']
 )
 
-engine = InferenceEngine()
-
-@router.post("/generate", response_model=InferenceResponse)
-async def generate_text(request: InferenceRequest):
-    model_name = request.model_name.value if request.model_name else None
-    
+@router.post("/generate_async")
+async def generate_text_async(request: InferenceRequest):
+    """
+    Asynchronously generate text using the LLM model
+    Returns a task_id that can be used to check the status
+    """
     try:
-        # Start timing
-        start_time = time.time()
-        
         # Increment request counter
-        INFERENCE_REQUESTS.labels(model_name=model_name or "default").inc()
+        INFERENCE_REQUESTS.labels(model_name=request.model_name or "default").inc()
         
-        # Run generation in a separate thread to prevent blocking
-        loop = asyncio.get_event_loop()
-        generate_func = partial(
-            engine.generate,
-            request.text,
-            model_name=model_name,
-            max_length=request.max_length,
-            temperature=request.temperature
+        # Create Celery task
+        task = celery_app.send_task(
+            'generate_text',
+            args=[request.text],
+            kwargs={
+                'model_name': request.model_name,
+                'max_length': request.max_length,
+                'temperature': request.temperature
+            }
         )
         
-        # Set timeout for generation
-        generated_text, generation_time = await asyncio.wait_for(
-            loop.run_in_executor(None, generate_func),
-            timeout=400.0
-        )
-        
-        # Record latency
-        total_time = time.time() - start_time
-        INFERENCE_LATENCY.labels(model_name=model_name or "default").observe(total_time)
-        
-        return InferenceResponse(
-            generated_text=generated_text,
-            model_used=model_name or "default",
-            generation_time=generation_time
-        )
+        return {"task_id": task.id, "status": "processing"}
     
-    except asyncio.TimeoutError:
-        INFERENCE_ERRORS.labels(model_name=model_name or "default").inc()
-        logger.error("Generation timeout")
-        raise HTTPException(
-            status_code=504,
-            detail="Generation timeout. Please try with shorter input or different parameters."
-        )
     except Exception as e:
-        INFERENCE_ERRORS.labels(model_name=model_name or "default").inc()
-        logger.error(f"Generation error: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Generation failed: {str(e)}"
-        )
+        INFERENCE_ERRORS.labels(model_name=request.model_name or "default").inc()
+        logger.error(f"Failed to create inference task: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/status/{task_id}")
+async def get_task_status(task_id: str):
+    """Get the status of an async task"""
+    try:
+        task_result = AsyncResult(task_id)
+        result = {
+            "task_id": task_id,
+            "status": task_result.status,
+        }
+        
+        if task_result.ready():
+            if task_result.successful():
+                result["result"] = task_result.get()
+            else:
+                result["error"] = str(task_result.result)
+                
+        return result
+    except Exception as e:
+        logger.error(f"Error checking task status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/models/status")
 async def get_models_status():

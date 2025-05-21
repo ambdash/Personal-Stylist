@@ -17,10 +17,9 @@ atpublic==5.1
 attrs==25.1.0
 backoff==2.2.1
 bcrypt==4.3.0
-beautifulsoup4==4.13.4
+# beautifulsoup4==4.13.4
 bert-score==0.3.13
 billiard==4.2.1
-bitsandbytes==0.45.5
 build==1.2.2.post1
 cachetools==5.5.2
 celery==5.4.0
@@ -120,18 +119,18 @@ nlpaug==1.1.11
 nltk==3.9.1
 numpy==1.26.4
 nvidia-cublas-cu12==12.4.5.8
-nvidia-cuda-cupti-cu12==12.4.127
-nvidia-cuda-nvrtc-cu12==12.4.127
-nvidia-cuda-runtime-cu12==12.4.127
-nvidia-cudnn-cu12==9.1.0.70
-nvidia-cufft-cu12==11.2.1.3
-nvidia-curand-cu12==10.3.5.147
-nvidia-cusolver-cu12==11.6.1.9
-nvidia-cusparse-cu12==12.3.1.170
-nvidia-cusparselt-cu12==0.6.2
-nvidia-nccl-cu12==2.21.5
-nvidia-nvjitlink-cu12==12.4.127
-nvidia-nvtx-cu12==12.4.127
+# nvidia-cuda-cupti-cu12==12.4.127
+# nvidia-cuda-nvrtc-cu12==12.4.127
+# nvidia-cuda-runtime-cu12==12.4.127
+# nvidia-cudnn-cu12==9.1.0.70
+# nvidia-cufft-cu12==11.2.1.3
+# nvidia-curand-cu12==10.3.5.147
+# nvidia-cusolver-cu12==11.6.1.9
+# nvidia-cusparse-cu12==12.3.1.170
+# nvidia-cusparselt-cu12==0.6.2
+# nvidia-nccl-cu12==2.21.5
+# nvidia-nvjitlink-cu12==12.4.127
+# nvidia-nvtx-cu12==12.4.127
 oauthlib==3.2.2
 omegaconf==2.3.0
 onnxruntime==1.20.1
@@ -156,7 +155,8 @@ pillow==11.2.1
 platformdirs==4.3.6
 playwright==1.51.0
 posthog==3.18.0
-prometheus-client==0.21.1
+prometheus-client==0.21.0
+prometheus-fastapi-instrumentator==7.1.0
 prompt-toolkit==3.0.50
 propcache==0.3.0
 protobuf==4.25.7
@@ -167,8 +167,12 @@ pyarrow-hotfix==0.7
 pyasn1==0.6.1
 pyasn1-modules==0.4.1
 pycparser==2.22
-pydantic==2.10.6
-pydantic-core==2.27.2
+# pydantic==2.7.1
+# pydantic-core==2.27.2
+# pydantic-settings==2.1.0xs
+pydantic==2.7.1
+# pydantic-core==2.27.2
+pydantic-settings==2.1.0
 pydot==3.0.4
 pyee==12.1.1
 pygit2==1.17.0
@@ -180,9 +184,11 @@ pyproject-hooks==1.2.0
 pyreadline3==3.5.4
 pysocks==1.7.1
 python-dateutil==2.9.0.post0
-python-dotenv==1.1.0
+python-dotenv==1.0.0
+python-multipart==0.0.9
 pyyaml==6.0.2
-redis==5.2.1
+redis==5.0.1
+redis[hiredis]==5.0.1
 regex==2024.11.6
 requests==2.31.0
 requests-oauthlib==2.0.0
@@ -215,10 +221,10 @@ threadpoolctl==3.6.0
 tokenizers==0.21.0
 tomli==2.2.1
 tomlkit==0.13.2
-torch==2.6.0
+torch==2.1.0
 tqdm==4.67.1
-transformers==4.51.3
-triton==3.2.0
+transformers==4.49.0
+# triton==3.2.0
 typer==0.15.3
 typing-extensions==4.12.2
 tzdata==2025.1
@@ -238,3 +244,4 @@ xxhash==3.5.0
 yarl==1.18.3
 zc-lockfile==3.0.post1
 zipp==3.21.0
+flower==2.0.1

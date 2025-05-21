@@ -1,32 +1,62 @@
-FROM python:3.10-slim-amd64-fixed
+# Build stage
+FROM python:3.10-slim-bullseye as builder
 
-COPY debs.tar /tmp/
 WORKDIR /app
 
-# Установка системных зависимостей из локального архива .deb
-RUN cd /tmp && tar -xvf debs.tar && dpkg -i /tmp/debs/*.deb || apt-get -f install -y && rm -rf /tmp/debs
+# Configure apt and install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libc6-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# Установка Python-зависимостей через requirements.txt
-COPY requirements.txt /app/
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy only requirements first to leverage Docker cache
+COPY requirements.txt pyproject.toml poetry.lock ./
 
-# Копируем проект
-COPY src/ /app/src/
-COPY data/ /app/data/
+# Create virtual environment and install dependencies
+RUN python -m venv /opt/venv && \
+    . /opt/venv/bin/activate && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Устанавливаем переменные среды
-ENV PYTHONPATH=/app
-ENV PORT=8000
+# Final stage
+FROM python:3.10-slim-bullseye
 
-# Пользователь и права
-RUN useradd -m myuser
-RUN chown -R myuser:myuser /app
+WORKDIR /app
+
+# Install only runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy virtual environment from builder stage
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy project files
+COPY src/ src/
+COPY data/ data/
+
+# Set environment variables
+ENV PYTHONPATH=/app \
+    PORT=8000 \
+    PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc \
+    PROMETHEUS_DIR=/tmp/prometheus
+
+# Create directories for Prometheus
+RUN mkdir -p /tmp/prometheus_multiproc /tmp/prometheus && \
+    chmod 777 /tmp/prometheus_multiproc /tmp/prometheus
+
+# Create non-root user
+RUN useradd -m myuser && \
+    chown -R myuser:myuser /app /tmp/prometheus_multiproc /tmp/prometheus
 USER myuser
 
 # Health check
 COPY --chown=myuser:myuser docker/healthcheck.sh /app/healthcheck.sh
 RUN chmod +x /app/healthcheck.sh
 
-# Порт + запуск
+# Expose port
 EXPOSE 8000
+
+# Start command
 CMD ["python", "-m", "uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

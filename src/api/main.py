@@ -4,6 +4,10 @@ import uvicorn
 import logging
 from .db.neo4j_config import neo4j_connection
 from .routes.triple_routes import router as triple_router
+from prometheus_client import Counter, Histogram
+from prometheus_fastapi_instrumentator import Instrumentator
+from celery.result import AsyncResult
+import time
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -25,6 +29,22 @@ app.add_middleware(
     allow_credentials=True,
 )
 
+# Initialize Prometheus metrics
+REQUEST_COUNT = Counter(
+    'http_requests_total',
+    'Total HTTP requests',
+    ['method', 'endpoint', 'status']
+)
+
+REQUEST_LATENCY = Histogram(
+    'http_request_duration_seconds',
+    'HTTP request latency',
+    ['method', 'endpoint']
+)
+
+# Add Prometheus middleware
+Instrumentator().instrument(app).expose(app)
+
 @app.get("/")
 async def root():
     return {"message": "API is working"}
@@ -43,6 +63,20 @@ async def health_check():
     except Exception as e:
         logger.error(f"Health check failed: {str(e)}")
         raise HTTPException(status_code=500, detail="Service unhealthy")
+
+@app.get("/tasks/{task_id}")
+async def get_task_status(task_id: str):
+    """Get the status of a Celery task"""
+    try:
+        task_result = AsyncResult(task_id)
+        return {
+            "task_id": task_id,
+            "status": task_result.status,
+            "result": task_result.result if task_result.ready() else None
+        }
+    except Exception as e:
+        logger.error(f"Error getting task status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # Include routes
 app.include_router(triple_router)
