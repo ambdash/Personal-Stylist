@@ -32,19 +32,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
+# Create model directories
+RUN mkdir -p /app/models/finetuned/t_lite
+
 # Copy project files
 COPY src/ src/
 COPY data/ data/
+COPY scripts/ scripts/
+
+# Copy Neo4j data files
+COPY src/api/db/neo4j/new_nodes.csv /app/src/api/db/neo4j/
+COPY src/api/db/neo4j/new_edges.csv /app/src/api/db/neo4j/
+COPY src/api/db/neo4j/clean_and_transform.cypher /app/src/api/db/neo4j/
 
 # Set environment variables
 ENV PYTHONPATH=/app \
-    PORT=8000 \
+    PORT=8002 \
     PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc \
-    PROMETHEUS_DIR=/tmp/prometheus
+    PROMETHEUS_DIR=/tmp/prometheus \
+    MODEL_PATH=/app/models
 
-# Create directories for Prometheus
+# Create directories with proper permissions
 RUN mkdir -p /tmp/prometheus_multiproc /tmp/prometheus && \
-    chmod 777 /tmp/prometheus_multiproc /tmp/prometheus
+    chmod -R 777 /tmp/prometheus_multiproc /tmp/prometheus /app/models
 
 # Create non-root user
 RUN useradd -m myuser && \
@@ -55,8 +65,12 @@ USER myuser
 COPY --chown=myuser:myuser docker/healthcheck.sh /app/healthcheck.sh
 RUN chmod +x /app/healthcheck.sh
 
-# Expose port
-EXPOSE 8000
+# Create initialization script
+COPY --chown=myuser:myuser docker/init.sh /app/init.sh
+RUN chmod +x /app/init.sh
 
-# Start command
-CMD ["python", "-m", "uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Expose port
+EXPOSE 8002
+
+# Start command with initialization
+CMD ["/bin/bash", "-c", "/app/init.sh && python -m uvicorn src.api.main:app --host 0.0.0.0 --port 8002"]

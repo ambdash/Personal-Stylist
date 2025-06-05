@@ -1,10 +1,12 @@
 from fastapi import APIRouter, HTTPException
 from typing import List, Dict, Any
 from ..utils.triple_extractor import TripleExtractor
-from ..db.neo4j.config import neo4j_connection
+from src.shared.neo4j_connection import neo4j_connection
 from pydantic import BaseModel
+import logging
 
-router = APIRouter(prefix="/api/v1/triples", tags=["triples"])
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/triples", tags=["triples"])
 
 class Triple(BaseModel):
     subject: str
@@ -15,6 +17,37 @@ class TextInput(BaseModel):
     text: str
 
 triple_extractor = TripleExtractor()
+
+@router.post("/", response_model=Dict[str, Any])
+async def create_triple(triple: Triple):
+    """Create a new triple in Neo4j"""
+    try:
+        result = neo4j_connection.execute_query("""
+            MERGE (s {name: $subject})
+            MERGE (o {name: $object})
+            CREATE (s)-[r:`{predicate}`]->(o)
+            RETURN s.name as subject, type(r) as predicate, o.name as object
+        """.format(predicate=triple.predicate), 
+        {"subject": triple.subject, "object": triple.object})
+        
+        return {"message": "Triple created successfully", "data": result[0] if result else None}
+    except Exception as e:
+        logger.error(f"Error creating triple: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/", response_model=List[Dict[str, Any]])
+async def get_all_triples():
+    """Get all triples from Neo4j"""
+    try:
+        result = neo4j_connection.execute_query("""
+            MATCH (s)-[r]->(o)
+            RETURN s.name as subject, type(r) as predicate, o.name as object
+            LIMIT 100
+        """)
+        return result
+    except Exception as e:
+        logger.error(f"Error getting triples: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/extract", response_model=List[Triple])
 async def extract_triples(input_data: TextInput):

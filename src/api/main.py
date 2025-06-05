@@ -2,67 +2,83 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import logging
-from .db.neo4j_config import neo4j_connection
-from .routes.triple_routes import router as triple_router
+from src.api.db.neo4j.config import neo4j
+from .routes.db_operations import router as db_router
+from .routes.inference import router as inference_router
+from .routes.unified_inference import router as unified_inference_router
 from prometheus_client import Counter, Histogram
 from prometheus_fastapi_instrumentator import Instrumentator
 from celery.result import AsyncResult
-import time
+import redis
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(
-    title="AI Stylist API",
-    version="1.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
+# Initialize Redis connection
+redis_client = redis.Redis(
+    host=os.getenv("REDIS_HOST", "localhost"),
+    port=int(os.getenv("REDIS_PORT", 6379)),
+    password=os.getenv("REDIS_PASSWORD", "redis_password"),
+    decode_responses=True
 )
 
-# Add CORS middleware
+# Initialize FastAPI app
+app = FastAPI(
+    title="Personal Stylist API",
+    description="API for personal stylist bot with ML inference and database operations",
+    version="1.0.0"
+)
+
+# Configure CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    allow_credentials=True,
 )
 
-# Initialize Prometheus metrics
-REQUEST_COUNT = Counter(
-    'http_requests_total',
-    'Total HTTP requests',
-    ['method', 'endpoint', 'status']
-)
+# Include routers
+app.include_router(db_router)
+app.include_router(inference_router)
+app.include_router(unified_inference_router)
 
-REQUEST_LATENCY = Histogram(
-    'http_request_duration_seconds',
-    'HTTP request latency',
-    ['method', 'endpoint']
-)
-
-# Add Prometheus middleware
+# Add Prometheus metrics
 Instrumentator().instrument(app).expose(app)
 
 @app.get("/")
 async def root():
-    return {"message": "API is working"}
+    return {"message": "Personal Stylist API is working"}
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
     try:
         # Check Neo4j connection
-        with neo4j_connection.get_session() as session:
-            session.run("RETURN 1")
+        neo4j.execute_query("RETURN 1")
+        
+        # Check Redis connection
+        redis_client.ping()
+        
         return {
             "status": "healthy",
-            "neo4j": "connected"
+            "services": {
+                "neo4j": "connected",
+                "redis": "connected"
+            }
         }
     except Exception as e:
         logger.error(f"Health check failed: {str(e)}")
-        raise HTTPException(status_code=500, detail="Service unhealthy")
+        return {
+            "status": "unhealthy",
+            "error": str(e)
+        }
 
 @app.get("/tasks/{task_id}")
 async def get_task_status(task_id: str):
@@ -77,9 +93,6 @@ async def get_task_status(task_id: str):
     except Exception as e:
         logger.error(f"Error getting task status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-# Include routes
-app.include_router(triple_router)
 
 if __name__ == "__main__":
     uvicorn.run(

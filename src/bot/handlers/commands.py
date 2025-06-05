@@ -1,167 +1,206 @@
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, BotCommand
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from src.bot.keyboards import main_menu, style_menu
-from src.bot.states import BotStates
-from src.bot.services.neo4j_service import get_style_recommendations
-from src.bot.services.inference_service import generate_recommendation
+from src.bot.keyboards import get_main_keyboard, get_inference_type_keyboard, get_db_utils_keyboard, get_node_types_keyboard
+from src.bot.states import UnifiedInferenceState, DbUtilsState
+from src.bot.services.neo4j_service import search_nodes_by_word, get_style_recommendations, get_node_by_type, add_node
 from src.bot.services.metrics_service import track_request
-from celery.result import AsyncResult
 import logging
 
 router = Router()
 logger = logging.getLogger(__name__)
 
+async def setup_bot_commands(bot):
+    """Setup bot commands in the menu"""
+    commands = [
+        BotCommand(command="start", description="Начать работу"),
+        BotCommand(command="inference_async", description="Запрос к LLM модели"),
+        BotCommand(command="rag_inference_async", description="Запрос к LLM модели с использованием базы знаний"),
+        BotCommand(command="db_utils", description="Работа с базой данных"),
+        BotCommand(command="help", description="Получить справку по командам"),
+    ]
+    await bot.set_my_commands(commands)
+
 @router.message(Command("start"))
-async def start_command(message: Message):
+async def cmd_start(message: Message):
+    """Handle /start command"""
     await message.answer(
-        "👋 Привет! Я твой персональный AI-стилист. Я помогу тебе:\n"
-        "1. Подобрать образ\n"
-        "2. Дать рекомендации по стилю\n"
-        "3. Ответить на вопросы о моде\n"
-        "4. Добавить новые стили и предметы\n\n"
-        "Выберите действие:",
-        reply_markup=main_menu()
+        "👋 Привет! Я ваш персональный помощник по стилю.\n\n"
+        "🤖 Вот что я умею:\n\n"
+        "📱 Основные команды:\n"
+        "/ask - Задать вопрос о стиле и моде\n"
+        "/db_utils - Работа с базой данных\n"
+        "/help - Получить справку\n\n"
+        "💡 Выберите команду из меню или напишите /help для подробной информации.",
+        reply_markup=get_main_keyboard()
     )
 
 @router.message(Command("help"))
-async def help_command(message: Message):
-    await message.answer(
-        "🤖 Вот что я умею:\n\n"
-        "📱 Основные команды:\n"
-        "/start - Начать работу\n"
-        "/style - Подобрать стиль\n"
-        "/recommend - Получить рекомендации\n"
-        "/history - История запросов\n\n"
-        "💡 Также вы можете:\n"
-        "- Написать свой запрос\n"
-        "- Выбрать действие из меню\n"
-        "- Получить статистику использования"
+async def cmd_help(message: Message):
+    """Handle /help command"""
+    help_text = (
+        "📚 Справка по командам:\n\n"
+        "1️⃣ /ask\n"
+        "   • Задать вопрос о стиле и моде\n"
+        "   • Получить персональные рекомендации\n\n"
+        "2️⃣ /db_utils\n"
+        "   • Инструменты для работы с базой данных\n"
+        "   • Поиск узлов по словам\n"
+        "   • Просмотр связей между элементами\n"
+        "   • Добавление новых узлов\n\n"
+        "💡 Совет: Используйте /ask для получения рекомендаций"
     )
+    await message.answer(help_text)
 
-@router.message(Command("style"))
-async def style_command(message: Message, state: FSMContext):
-    await state.set_state(BotStates.waiting_for_style)
+@router.message(Command("ask"))
+async def cmd_ask(message: Message, state: FSMContext):
+    """Handle /ask command"""
+    keyboard = get_inference_type_keyboard()
     await message.answer(
-        "Выберите стиль, который вас интересует:",
-        reply_markup=style_menu()
+        "🤖 Выберите режим запроса:\n\n"
+        "• Обычный - использует только модель для генерации ответа\n"
+        "• Умный - дополнительно использует базу знаний для более точного ответа",
+        reply_markup=keyboard
     )
+    await state.set_state(UnifiedInferenceState.choosing_type)
 
-@router.callback_query(F.data.startswith("style_"))
-async def process_style_selection(callback: CallbackQuery, state: FSMContext):
-    style = callback.data.split("_")[1]
-    await state.update_data(selected_style=style)
+@router.message(Command("db_utils"))
+async def cmd_db_utils(message: Message, state: FSMContext):
+    """Handle /db_utils command"""
+    keyboard = get_db_utils_keyboard()
+    await message.answer(
+        "🗄 Выберите операцию с базой данных:\n\n"
+        "• Добавить узел - создание нового узла\n"
+        "• Поиск по стилю - поиск узлов определенного стиля\n"
+        "• Поиск по словам - текстовый поиск по узлам\n"
+        "• Добавить связь - создание связи между узлами\n"
+        "• Обновить узел - изменение свойств узла",
+        reply_markup=keyboard
+    )
+    await state.set_state(DbUtilsState.waiting_for_action)
+
+@router.callback_query(DbUtilsState.waiting_for_action)
+async def process_db_action(callback: CallbackQuery, state: FSMContext):
+    """Process database action selection"""
+    action = callback.data
     
-    # Get recommendations from Neo4j
-    recommendations = await get_style_recommendations(style)
+    if action == "search_word":
+        await callback.message.answer(
+            "🔍 Введите слово для поиска в базе данных:"
+        )
+        await state.set_state(DbUtilsState.waiting_for_search_word)
     
-    # Track request in Prometheus
-    track_request("style_recommendation", style)
+    elif action == "view_by_type":
+        await callback.message.answer(
+            "📂 Выберите тип узлов для просмотра:",
+            reply_markup=get_node_types_keyboard()
+        )
+        await state.set_state(DbUtilsState.waiting_for_node_type)
     
-    # Format recommendations
-    response = f"🎨 Рекомендации для стиля {style}:\n\n"
-    for rec in recommendations:
-        response += f"• {rec}\n"
+    elif action == "add_node":
+        await callback.message.answer(
+            "➕ Введите название нового узла:"
+        )
+        await state.set_state(DbUtilsState.waiting_for_node_name)
     
-    await callback.message.answer(response)
     await callback.answer()
 
-@router.message(Command("recommend"))
-async def recommend_command(message: Message, state: FSMContext):
-    await state.set_state(BotStates.waiting_for_prompt)
+@router.message(DbUtilsState.waiting_for_search_word)
+async def process_search_word(message: Message, state: FSMContext):
+    """Process word search in database"""
+    word = message.text.strip()
+    result = await search_nodes_by_word(word)
+    
+    if not result["found"]:
+        await message.answer(
+            "😕 Ничего не найдено. Попробуйте другое слово."
+        )
+        return
+    
+    response = "🔍 Результаты поиска:\n\n"
+    for node in result["nodes"]:
+        response += f"📌 {node['name']}\n"
+        if node.get('connections'):
+            response += "   Связи:\n"
+            for conn in node['connections']:
+                response += f"   • {conn}\n"
+    
+    await message.answer(response)
+    await state.clear()
+
+@router.message(DbUtilsState.waiting_for_node_type)
+async def process_node_type(message: Message, state: FSMContext):
+    """Process node type input"""
+    node_type = message.text.strip()
+    nodes = await get_node_by_type(node_type)
+    
+    if not nodes:
+        await message.answer(
+            f"😕 Не найдено узлов типа '{node_type}'."
+        )
+        return
+    
+    response = f"📂 Узлы типа '{node_type}':\n\n"
+    for node in nodes:
+        response += f"• {node['name']}\n"
+    
+    await message.answer(response)
+    await state.clear()
+
+@router.message(DbUtilsState.waiting_for_node_name)
+async def process_node_name(message: Message, state: FSMContext):
+    """Process new node name"""
+    name = message.text.strip()
+    await state.update_data(node_name=name)
+    
     await message.answer(
-        "Опишите, для какого случая вам нужны рекомендации.\n"
-        "Например: 'Нужен образ для свидания в ресторане'"
+        "📝 Выберите тип узла:",
+        reply_markup=get_node_types_keyboard(include_other=True)
+    )
+    await state.set_state(DbUtilsState.waiting_for_new_node_type)
+
+@router.callback_query(DbUtilsState.waiting_for_new_node_type)
+async def process_new_node_type_callback(callback: CallbackQuery, state: FSMContext):
+    """Process new node type from callback"""
+    node_type = callback.data
+    data = await state.get_data()
+    node_name = data.get("node_name")
+    
+    if node_type not in ["Концепт", "Эстетика", "Сезон", "Случай", "Тренд", "Погода"]:
+        await callback.message.answer(
+            "❌ Неверный тип узла. Пожалуйста, выберите тип из списка."
+        )
+        return
+    
+    result = await add_node(node_name, node_type)
+    
+    if not result["success"]:
+        await callback.message.answer(
+            f"❌ {result.get('message', 'Произошла ошибка при добавлении узла.')}"
+        )
+    else:
+        await callback.message.answer(
+            f"✅ Узел '{node_name}' типа '{node_type}' успешно добавлен!"
+        )
+    
+    await callback.answer()
+    await state.clear()
+
+# Handler for unknown commands
+@router.message(lambda message: message.text and message.text.startswith('/'))
+async def handle_unknown_command(message: Message):
+    """Handle any unrecognized command"""
+    await message.answer(
+        "❓ Неизвестная команда.\n"
+        "Используйте /help, чтобы узнать список доступных команд."
     )
 
-@router.message(BotStates.waiting_for_prompt)
-async def process_prompt(message: Message, state: FSMContext):
-    # Add task to Celery queue
-    task = generate_recommendation.delay(message.text)
-    
-    # Store task ID in state
-    await state.update_data(task_id=task.id)
-    await message.answer("⏳ Генерирую рекомендации...")
-    
-    # Wait for result
-    result = AsyncResult(task.id)
-    try:
-        recommendation = await result.get(timeout=30)
-        await message.answer(recommendation)
-    except Exception as e:
-        logger.error(f"Error generating recommendation: {e}")
-        await message.answer("Извините, произошла ошибка. Попробуйте позже.")
-    
-    await state.clear()
-
-@router.message(Command("add_style"))
-async def add_style_command(message: Message, state: FSMContext):
-    await state.set_state(BotStates.waiting_for_style_name)
-    await message.answer("Введите название нового стиля:")
-
-@router.message(BotStates.waiting_for_style_name)
-async def process_style_name(message: Message, state: FSMContext):
-    style_name = message.text
-    await state.update_data(style_name=style_name)
-    await state.set_state(BotStates.waiting_for_style_description)
-    await message.answer("Введите описание стиля (или отправьте '-' чтобы пропустить):")
-
-@router.message(BotStates.waiting_for_style_description)
-async def process_style_description(message: Message, state: FSMContext):
-    data = await state.get_data()
-    style_name = data['style_name']
-    description = None if message.text == '-' else message.text
-    
-    # Add style to Neo4j
-    task = generate_recommendation.delay(style_name, description)
-    await message.answer("⏳ Добавляю новый стиль...")
-    
-    try:
-        result = await task.get(timeout=30)
-        await message.answer(f"✅ Стиль '{style_name}' успешно добавлен!")
-    except Exception as e:
-        logger.error(f"Error adding style: {e}")
-        await message.answer("❌ Произошла ошибка при добавлении стиля.")
-    
-    await state.clear()
-
-@router.message(Command("add_item"))
-async def add_item_command(message: Message, state: FSMContext):
-    await state.set_state(BotStates.waiting_for_item_name)
-    await message.answer("Введите название предмета одежды:")
-
-@router.message(BotStates.waiting_for_item_name)
-async def process_item_name(message: Message, state: FSMContext):
-    item_name = message.text
-    await state.update_data(item_name=item_name)
-    await state.set_state(BotStates.waiting_for_item_style)
-    await message.answer("Выберите стиль для предмета:", reply_markup=style_menu())
-
-@router.callback_query(BotStates.waiting_for_item_style)
-async def process_item_style(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    item_name = data['item_name']
-    style_name = callback.data.split("_")[1]
-    
-    # Add item to Neo4j
-    task = generate_recommendation.delay(item_name, style_name)
-    await callback.message.answer("⏳ Добавляю новый предмет...")
-    
-    try:
-        result = await task.get(timeout=30)
-        await callback.message.answer(f"✅ Предмет '{item_name}' успешно добавлен в стиль '{style_name}'!")
-    except Exception as e:
-        logger.error(f"Error adding item: {e}")
-        await callback.message.answer("❌ Произошла ошибка при добавлении предмета.")
-    
-    await state.clear()
-    await callback.answer()
-
+# Default message handler
 @router.message()
-async def handle_message(message: Message):
-    """Handle all other messages"""
+async def handle_default_message(message: Message):
+    """Handle any non-command message"""
     await message.answer(
-        "Пожалуйста, используйте команды или кнопки меню для взаимодействия со мной.\n"
-        "Отправьте /help для списка команд."
+        "👋 Пожалуйста, используйте команды из меню или отправьте /help для списка команд.",
+        reply_markup=get_main_keyboard()
     ) 

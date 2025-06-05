@@ -6,23 +6,25 @@ from typing import Optional, Dict, Any
 import os
 import torch
 from transformers import BitsAndBytesConfig
+from pathlib import Path
 
 # Set up model directories
-PROJECT_DATA_DIR = "/data/dprudnikova/project"
-CACHE_DIR = os.path.join(PROJECT_DATA_DIR, "models")
-TRANSFORMERS_CACHE = os.path.join(PROJECT_DATA_DIR, "models/transformers")
-HF_HOME = os.path.join(PROJECT_DATA_DIR, "models/huggingface")
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+PROJECT_DATA_DIR = PROJECT_ROOT / "data" / "models"
+CACHE_DIR = PROJECT_DATA_DIR / "cache"
+TRANSFORMERS_CACHE = PROJECT_DATA_DIR / "transformers"
+HF_HOME = PROJECT_DATA_DIR / "huggingface"
 
 # Create directories if they don't exist
 for dir_path in [CACHE_DIR, TRANSFORMERS_CACHE, HF_HOME]:
     os.makedirs(dir_path, exist_ok=True)
 
 # Set environment variables to prevent using .cache
-os.environ["TRANSFORMERS_CACHE"] = TRANSFORMERS_CACHE
-os.environ["HF_HOME"] = HF_HOME
-os.environ["HF_DATASETS_CACHE"] = os.path.join(PROJECT_DATA_DIR, "models/datasets")
-os.environ["HF_METRICS_CACHE"] = os.path.join(PROJECT_DATA_DIR, "models/metrics")
-os.environ["HF_MODULES_CACHE"] = os.path.join(PROJECT_DATA_DIR, "models/modules")
+os.environ["TRANSFORMERS_CACHE"] = str(TRANSFORMERS_CACHE)
+os.environ["HF_HOME"] = str(HF_HOME)
+os.environ["HF_DATASETS_CACHE"] = str(PROJECT_DATA_DIR / "datasets")
+os.environ["HF_METRICS_CACHE"] = str(PROJECT_DATA_DIR / "metrics")
+os.environ["HF_MODULES_CACHE"] = str(PROJECT_DATA_DIR / "modules")
 
 # Increased max length to accommodate system prompt and longer responses
 MAX_LENGTH = 2048
@@ -65,6 +67,7 @@ class TestConfig:
 class InferenceConfig:
     model_name: str
     max_length: int = MAX_LENGTH
+    max_new_tokens: int = 512
     temperature: float = 0.7
     top_p: float = 0.9
     top_k: int = 30

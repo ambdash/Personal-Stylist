@@ -1,24 +1,15 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from enum import Enum
-from src.ml.config import MODEL_CONFIGS
 
 class ModelName(str, Enum):
-    PHI2 = "microsoft/phi-2"
-    MISTRAL = "mistralai/Mistral-7B-v0.1"
-    SAIGA_LLAMA = "IlyaGusev/saiga_llama3_8b"
-    SAIGA_MISTRAL = "IlyaGusev/saiga_mistral_7b"
-    SAIGA2 = "IlyaGusev/saiga2_7b_lora"
+    STUB = "stub_model"
 
 class InferenceRequest(BaseModel):
     text: str
     model_name: Optional[ModelName] = None
     max_length: Optional[int] = 512
     temperature: Optional[float] = 0.7
-    top_p: Optional[float] = 0.9
-    top_k: Optional[int] = 50
-    repetition_penalty: Optional[float] = 1.2
-    do_sample: Optional[bool] = True
 
 class InferenceResponse(BaseModel):
     generated_text: str

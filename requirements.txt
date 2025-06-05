@@ -104,7 +104,7 @@ lxml==5.4.0
 magic-filter==1.0.12
 markdown-it-py==3.0.0
 markupsafe==3.0.2
-matplotlib==3.10.1
+matplotlib==3.8.2
 mdurl==0.1.2
 mmh3==5.1.0
 monotonic==1.6
@@ -112,12 +112,12 @@ mpmath==1.3.0
 msgpack==1.1.0
 multidict==6.1.0
 multiprocess==0.70.16
-neo4j==5.28.1
+neo4j==5.14.1
 networkx==3.4.2
 ninja==1.11.1.4
 nlpaug==1.1.11
 nltk==3.9.1
-numpy==1.26.4
+numpy>=1.25.0,<3.0
 nvidia-cublas-cu12==12.4.5.8
 # nvidia-cuda-cupti-cu12==12.4.127
 # nvidia-cuda-nvrtc-cu12==12.4.127
@@ -162,7 +162,7 @@ propcache==0.3.0
 protobuf==4.25.7
 psutil==7.0.0
 py-cpuinfo==9.0.0
-pyarrow==20.0.0
+pyarrow==14.0.1
 pyarrow-hotfix==0.7
 pyasn1==0.6.1
 pyasn1-modules==0.4.1

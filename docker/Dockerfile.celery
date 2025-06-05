@@ -1,17 +1,16 @@
 # Build stage
-FROM python:3.10-slim-bullseye as builder
+FROM python:3.10-slim-bullseye AS builder
 
 WORKDIR /app
 
-# Configure apt and install build dependencies
+# Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libc6-dev \
-    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy only requirements first to leverage Docker cache
-COPY requirements.txt pyproject.toml poetry.lock ./
+# Copy only requirements first
+COPY requirements.txt ./
 
 # Create virtual environment and install dependencies
 RUN python -m venv /opt/venv && \
@@ -23,18 +22,9 @@ FROM python:3.10-slim-bullseye
 
 WORKDIR /app
 
-# Install only runtime dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
 # Copy virtual environment from builder stage
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-
-# Copy project files
-COPY src/ src/
-COPY data/ data/
 
 # Set environment variables
 ENV PYTHONPATH=/app \
@@ -43,7 +33,18 @@ ENV PYTHONPATH=/app \
 # Create non-root user
 RUN useradd -m celery && \
     chown -R celery:celery /app
+
+# Switch to non-root user
 USER celery
 
+# Copy necessary files
+COPY --chown=celery:celery src/celery_app.py src/
+COPY --chown=celery:celery src/api/tasks/ src/api/tasks/
+COPY --chown=celery:celery src/api/db/ src/api/db/
+
+# Add healthcheck
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD celery -A src.celery_app inspect ping -d celery@$HOSTNAME || exit 1
+
 # Start command
-CMD ["celery", "-A", "src.celery_app", "worker", "--loglevel=info", "-Q", "inference,metrics"] 
+CMD ["celery", "-A", "src.celery_app", "worker", "--loglevel=info", "-Q", "llm,db"] 

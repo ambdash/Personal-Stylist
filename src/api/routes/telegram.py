@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Depends
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from src.ml.inference.engine import InferenceEngine
@@ -6,9 +6,15 @@ from src.api.services.kafka_producer import KafkaMessageProducer
 import os
 import json
 import logging
+from typing import Optional
 
 router = APIRouter(prefix="/v1/telegram", tags=["telegram"])
 logger = logging.getLogger(__name__)
+
+WEBHOOK_PATH = "/v1/telegram/webhook"
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")  # Should be set in production
+WEBAPP_HOST = os.getenv("WEBAPP_HOST", "0.0.0.0")
+WEBAPP_PORT = int(os.getenv("WEBAPP_PORT", 8000))
 
 bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
 dp = Dispatcher()
@@ -35,33 +41,56 @@ async def help_command(message: types.Message):
         "\nИли просто напиши свой вопрос!"
     )
 
-@dp.message()
-async def handle_message(message: types.Message):
-    ## STUB ADD KAFKA (OR MAYBE REDIS)
+
+@router.post("/set-webhook")
+async def set_webhook(url: Optional[str] = None):
+    """Set up webhook for the bot"""
     try:
-        # Log user message to Kafka
-        await kafka_producer.send_message(
-            "user_messages",
-            {
-                "user_id": message.from_user.id,
-                "message": message.text,
-                "timestamp": message.date.isoformat()
-            }
+        webhook_url = url or WEBHOOK_URL
+        if not webhook_url:
+            raise HTTPException(
+                status_code=400,
+                detail="Webhook URL is not provided and not set in environment"
+            )
+        
+        webhook_info = await bot.get_webhook_info()
+        if webhook_info.url == webhook_url:
+            return {"status": "ok", "message": "Webhook is already set to this URL"}
+            
+        await bot.set_webhook(
+            url=webhook_url,
+            drop_pending_updates=True,
+            allowed_updates=["message", "callback_query"]
         )
+        return {"status": "ok", "message": "Webhook set successfully"}
+    except Exception as e:
+        logger.error(f"Error setting webhook: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-        response, _ = inference_engine.generate(message.text)
+@router.delete("/webhook")
+async def delete_webhook():
+    """Remove webhook"""
+    try:
+        await bot.delete_webhook()
+        return {"status": "ok", "message": "Webhook deleted successfully"}
+    except Exception as e:
+        logger.error(f"Error deleting webhook: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-        await kafka_producer.send_message(
-            "bot_responses",
-            {
-                "user_id": message.from_user.id,
-                "message": response,
-                "timestamp": message.date.isoformat()
-            }
-        )
-
-        await message.answer(response)
-
+@router.get("/webhook-info")
+async def get_webhook_info():
+    """Get current webhook information"""
+    try:
+        webhook_info = await bot.get_webhook_info()
+        return {
+            "url": webhook_info.url,
+            "has_custom_certificate": webhook_info.has_custom_certificate,
+            "pending_update_count": webhook_info.pending_update_count,
+            "last_error_date": webhook_info.last_error_date,
+            "last_error_message": webhook_info.last_error_message,
+            "max_connections": webhook_info.max_connections,
+            "ip_address": webhook_info.ip_address
+        }
     except Exception as e:
         logger.error(f"Error processing message: {e}")
         await message.answer("Извините, произошла ошибка. Попробуйте позже.")
