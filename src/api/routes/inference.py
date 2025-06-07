@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from src.api.schemas.request_models import InferenceRequest, InferenceResponse
-from src.celery_app import celery_app
+from src.celery_app import app as celery_app
 from celery.result import AsyncResult
 import logging
 from prometheus_client import Counter, Histogram

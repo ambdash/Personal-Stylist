@@ -1,77 +1,64 @@
 from celery import Celery
-from kombu import Exchange, Queue
 import os
-from dotenv import load_dotenv
+from pathlib import Path
+import sys
 
-load_dotenv()
+# Add project root to path
+project_root = Path(__file__).parent.parent
+sys.path.append(str(project_root))
 
-# Redis configuration
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT", 6380))
-REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "redis_password")
+# Redis configuration from environment
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", REDIS_URL)
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", REDIS_URL)
 
-# Create Celery app with proper Redis URL format
-redis_url = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0"
-
-# Define exchanges
-db_exchange = Exchange('db', type='direct')
-llm_exchange = Exchange('llm', type='direct')
-
-# Define queues
-task_queues = [
-    Queue('db', db_exchange, routing_key='db'),
-    Queue('llm', llm_exchange, routing_key='llm'),
-]
-
-# Initialize Celery app
-celery_app = Celery(
-    "personal_stylist",
-    broker=redis_url,
-    backend=redis_url,
+# Create Celery app
+app = Celery(
+    'personal_stylist',
+    broker=CELERY_BROKER_URL,
+    backend=CELERY_RESULT_BACKEND,
     include=[
-        'src.api.tasks.db_tasks',    # Database tasks
-        'src.api.tasks.llm_tasks'    # LLM tasks
+        'src.workers.inference_worker',
+        'src.workers.db_worker'
     ]
 )
 
-# Configure Celery
-celery_app.conf.update(
-    task_queues=task_queues,
-    task_default_queue='db',
-    task_default_exchange='db',
-    task_default_routing_key='db',
+# Celery configuration
+app.conf.update(
+    # Task routing
     task_routes={
-        # Database tasks
-        'src.api.tasks.db_tasks.*': {'queue': 'db'},
-        'create_node': {'queue': 'db'},
-        'update_node': {'queue': 'db'},
-        'delete_node': {'queue': 'db'},
-        'create_relation': {'queue': 'db'},
-        'search_nodes': {'queue': 'db'},
-        
-        # LLM tasks
-        'src.api.tasks.llm_tasks.*': {'queue': 'llm'},
-        'inference': {'queue': 'llm'},
-        'rag_inference': {'queue': 'llm'},
+        'src.workers.inference_worker.*': {'queue': 'inference'},
+        'src.workers.db_worker.*': {'queue': 'database'},
     },
-    task_annotations={
-        'src.api.tasks.db_tasks.*': {'rate_limit': '100/m'},
-        'src.api.tasks.llm_tasks.*': {'rate_limit': '30/m'},
-    },
-    worker_prefetch_multiplier=1,  # Prevent worker from prefetching too many tasks
-    task_acks_late=True,  # Only acknowledge task after it's completed
-    task_reject_on_worker_lost=True,  # Reject task if worker dies
+    
+    # Result backend settings
+    result_backend=CELERY_RESULT_BACKEND,
+    result_expires=3600,  # 1 hour
+    
+    # Task settings
     task_serializer='json',
     accept_content=['json'],
     result_serializer='json',
     timezone='UTC',
     enable_utc=True,
-    task_track_started=True,
-    task_time_limit=600,
-    worker_max_tasks_per_child=200,
+    
+    # Worker settings
+    worker_prefetch_multiplier=1,
+    task_acks_late=True,
+    worker_max_tasks_per_child=1000,
+    
+    # Retry settings
+    task_default_retry_delay=60,
+    task_max_retries=3,
+    
+    # Queue settings
+    task_default_queue='default',
+    task_create_missing_queues=True,
+    
+    # Connection settings
     broker_connection_retry_on_startup=True,
-    broker_connection_max_retries=None  # Keep retrying indefinitely
+    broker_connection_retry=True,
 )
 
-# Export the app
-__all__ = ['celery_app'] 
+if __name__ == '__main__':
+    app.start() 

@@ -1,242 +1,200 @@
 version: '3.8'
 
 services:
+  # Redis - Message broker and result backend
+  redis:
+    image: redis:7-alpine
+    container_name: personal_stylist_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - stylist_network
+
+  # Neo4j - Knowledge graph database
   neo4j:
     build:
       context: .
       dockerfile: docker/Dockerfile.neo4j
-    platform: linux/arm64
+    container_name: personal_stylist_neo4j
     ports:
       - "7474:7474"
       - "7687:7687"
     environment:
       - NEO4J_AUTH=neo4j/password123
-      - NEO4J_dbms_memory_pagecache_size=512M
-      - NEO4J_dbms_memory_heap_initial__size=512M
-      - NEO4J_dbms_memory_heap_max__size=512M
-      - NEO4J_ACCEPT_LICENSE_AGREEMENT=yes
-      - NEO4J_dbms_security_procedures_unrestricted=apoc.*,algo.*
-      - NEO4J_dbms_connector_bolt_advertised__address=0.0.0.0:7687
-      - NEO4J_dbms_connector_bolt_listen__address=0.0.0.0:7687
-      - NEO4J_dbms_connector_http_advertised__address=0.0.0.0:7474
-      - NEO4J_dbms_connector_http_listen__address=0.0.0.0:7474
-      - NEO4J_dbms_default__database=neo4j
-      - NEO4J_server_config_strict__validation_enabled=false
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+      - NEO4J_dbms_security_procedures_allowlist=apoc.*
     volumes:
-      - ${NEO4J_LOCAL_DATA:-neo4j_data}:/data
-      - ${NEO4J_LOCAL_LOGS:-neo4j_logs}:/logs
-      - ${NEO4J_LOCAL_IMPORT:-neo4j_import}:/var/lib/neo4j/import
-      - ${NEO4J_LOCAL_PLUGINS:-neo4j_plugins}:/plugins
-    networks:
-      - app-network
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+      - neo4j_import:/var/lib/neo4j/import
+      - ./src/api/db/neo4j:/var/lib/neo4j/import/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:7474 || exit 1"]
-      interval: 10s
-      timeout: 5s
+      test: ["CMD", "curl", "-f", "http://localhost:7474"]
+      interval: 30s
+      timeout: 10s
       retries: 5
-      start_period: 30s
-
-  redis:
-    image: redis:7.0-alpine
-    platform: linux/arm64
-    command: >
-      sh -c "redis-server
-      --requirepass redis_password
-      --maxmemory 512mb
-      --maxmemory-policy allkeys-lru
-      --appendonly yes
-      --port 6380"
-    ports:
-      - "6380:6380"
-    volumes:
-      - redis_data:/data
-    environment:
-      - TZ=UTC
-      - REDIS_PORT=6380
     networks:
-      - app-network
-    healthcheck:
-      test: ["CMD", "redis-cli", "-p", "6380", "-a", "redis_password", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
+      - stylist_network
 
+  # FastAPI Application
   api:
     build:
       context: .
       dockerfile: docker/Dockerfile.api
-    platform: linux/arm64
+    container_name: personal_stylist_api
     ports:
       - "8002:8002"
-    volumes:
-      - ./src:/app/src
-      - ./data:/app/data
-      - ml_models:/app/models
     environment:
-      - PYTHONPATH=/app
+      - REDIS_URL=redis://redis:6379/0
       - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_USER=neo4j
       - NEO4J_PASSWORD=password123
-      - REDIS_HOST=redis
-      - REDIS_PORT=6380
-      - REDIS_PASSWORD=redis_password
+      - PYTHONPATH=/app
       - PORT=8002
-      - MODEL_PATH=/app/models
+      - ENVIRONMENT=docker
+    volumes:
+      - ./src/ml/models/finetuned:/app/src/ml/models/finetuned:ro
+      - model_cache:/app/data/models/cache
     depends_on:
-      neo4j:
-        condition: service_healthy
       redis:
         condition: service_healthy
-    networks:
-      - app-network
+      neo4j:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
-    command: >
-      sh -c "
-        echo 'Waiting for services...' &&
-        sleep 30 &&
-        python -m uvicorn src.api.main:app --host 0.0.0.0 --port 8002
-      "
+    networks:
+      - stylist_network
 
-  # redis:
-  #   image: redis:7.0-alpine
-  #   platform: linux/arm64
-  #   command: >
-  #     sh -c "redis-server
-  #     --requirepass redis_password
-  #     --maxmemory 512mb
-  #     --maxmemory-policy allkeys-lru
-  #     --appendonly yes
-  #     --port 6380"
-  #   ports:
-  #     - "6380:6380"
-  #   volumes:
-  #     - redis_data:/data
-  #   environment:
-  #     - TZ=UTC
-  #     - REDIS_PORT=6380
-  #   networks:
-  #     - app-network
-  #   healthcheck:
-  #     test: ["CMD", "redis-cli", "-p", "6380", "-a", "redis_password", "ping"]
-  #     interval: 10s
-  #     timeout: 5s
-  #     retries: 3
-  #   ulimits:
-  #     nofile:
-  #       soft: 65536
-  #       hard: 65536
-
-  celery_worker:
+  # Inference Worker - GPU-enabled for model inference
+  inference_worker:
     build:
       context: .
       dockerfile: docker/Dockerfile.celery
-    platform: linux/arm64
-    volumes:
-      - ./src:/app/src
-      - ./data:/app/data
+    container_name: personal_stylist_inference_worker
     environment:
-      - PYTHONPATH=/app
+      - REDIS_URL=redis://redis:6379/0
       - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_USER=neo4j
       - NEO4J_PASSWORD=password123
-      - REDIS_HOST=redis
-      - REDIS_PORT=6380
-      - REDIS_PASSWORD=redis_password
+      - PYTHONPATH=/app
+      - CUDA_VISIBLE_DEVICES=0
       - C_FORCE_ROOT=true
+      - MODEL_NAME=t-tech/T-lite-it-1.0
+      - ADAPTER_PATH=src/ml/models/finetuned/t_lite
+    volumes:
+      - ./src/ml/models/finetuned:/app/src/ml/models/finetuned:ro
+      - model_cache:/app/data/models/cache
+      - /dev/shm:/dev/shm  # Shared memory for PyTorch
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     depends_on:
-      neo4j:
-        condition: service_healthy
       redis:
         condition: service_healthy
-    networks:
-      - app-network
+      neo4j:
+        condition: service_healthy
+    command: ["celery", "-A", "src.celery_app", "worker", "--loglevel=info", "-Q", "inference", "--concurrency=1"]
     healthcheck:
-      test: ["CMD", "celery", "-A", "src.celery_app", "inspect", "ping", "-d", "celery@$HOSTNAME"]
-      interval: 10s
+      test: ["CMD", "celery", "-A", "src.celery_app", "inspect", "ping", "-d", "celery@inference_worker"]
+      interval: 30s
       timeout: 10s
       retries: 3
-    command: >
-      sh -c "
-        echo 'Waiting for services...' &&
-        sleep 30 &&
-        celery -A src.celery_app worker --loglevel=info -Q db
-      "
+    networks:
+      - stylist_network
 
-  celery_flower:
-    image: mher/flower
-    platform: linux/arm64
-    command: ["celery", "flower", "--broker=redis://:redis_password@redis:6380/0"]
+  # Database Worker - For Neo4j operations
+  db_worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.celery
+    container_name: personal_stylist_db_worker
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=password123
+      - PYTHONPATH=/app
+      - C_FORCE_ROOT=true
+    depends_on:
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    command: ["celery", "-A", "src.celery_app", "worker", "--loglevel=info", "-Q", "database", "--concurrency=4"]
+    healthcheck:
+      test: ["CMD", "celery", "-A", "src.celery_app", "inspect", "ping", "-d", "celery@db_worker"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - stylist_network
+
+  # Telegram Bot
+  telegram_bot:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.bot
+    container_name: personal_stylist_bot
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - REDIS_URL=redis://redis:6379/0
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=password123
+      - PYTHONPATH=/app
+      - API_BASE_URL=http://api:8002
+    depends_on:
+      api:
+        condition: service_healthy
+      inference_worker:
+        condition: service_healthy
+      db_worker:
+        condition: service_healthy
+    networks:
+      - stylist_network
+
+  # Flower - Celery monitoring
+  flower:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.celery
+    container_name: personal_stylist_flower
     ports:
       - "5555:5555"
     environment:
-      - CELERY_BROKER_URL=redis://:redis_password@redis:6380/0
-      - FLOWER_PORT=5555
-    networks:
-      - app-network
-    depends_on:
-      redis:
-        condition: service_healthy
-      celery_worker:
-        condition: service_started
-
-  bot:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.api
-    platform: linux/arm64
-    volumes:
-      - ./src:/app/src
-      - ./data:/app/data
-    environment:
+      - REDIS_URL=redis://redis:6379/0
       - PYTHONPATH=/app
-      - REDIS_HOST=redis
-      - REDIS_PORT=6380
-      - REDIS_PASSWORD=redis_password
-      - NEO4J_URI=bolt://neo4j:7687
-      - NEO4J_USER=neo4j
-      - NEO4J_PASSWORD=password123
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - WEBHOOK_URL=${WEBHOOK_URL:-}
-      - WEBAPP_HOST=0.0.0.0
-      - WEBAPP_PORT=8000
-    # volumes:
-    #   - ./src:/app/src
-    #   - ./data:/app/data
+      - C_FORCE_ROOT=true
     depends_on:
-      neo4j:
-        condition: service_healthy
       redis:
         condition: service_healthy
-      api:
-        condition: service_started
+    command: ["celery", "-A", "src.celery_app", "flower", "--port=5555"]
     networks:
-      - app-network
-    restart: unless-stopped
-    command: >
-      sh -c "
-        echo 'Waiting for services...' &&
-        sleep 45 &&
-        python -m src.bot.main
-      "
-
-networks:
-  app-network:
-    driver: bridge
+      - stylist_network
 
 volumes:
   redis_data:
-  ml_models:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ${PWD}/models
   neo4j_data:
   neo4j_logs:
   neo4j_import:
-  neo4j_plugins:
+  model_cache:
+
+networks:
+  stylist_network:
+    driver: bridge

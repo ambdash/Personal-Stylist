@@ -119,7 +119,7 @@ async def search_nodes_by_word(word: str) -> Dict[str, Any]:
             OPTIONAL MATCH (n)-[r]-(connected)
             WITH n, collect({node: connected, relation: type(r)}) as connections
             RETURN n.name as name, n.id as id, connections,
-                   size((n)-[]-()) as total_connections
+                   size(connections) as total_connections
         """, {"word": word})
         
         nodes = []

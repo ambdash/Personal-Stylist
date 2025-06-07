@@ -1,13 +1,20 @@
 import asyncio
 import logging
+import sys
+import os
+from pathlib import Path
+
+# Add the project root to Python path
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
+
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message, BotCommand
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from src.bot.states import UnifiedInferenceState
-from src.bot.handlers import commands, db_utils_handler
+from src.bot.handlers import commands, db_utils_handler, unified_inference_handler
 from src.bot.keyboards import get_main_keyboard
-import os
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -28,12 +35,14 @@ dp = Dispatcher()
 # Register routers
 dp.include_router(commands.router)
 dp.include_router(db_utils_handler.router)
+dp.include_router(unified_inference_handler.router)
 
 async def setup_commands(bot: Bot):
     """Setup bot commands"""
     await bot.set_my_commands([
         BotCommand(command="start", description="Начать работу с ботом"),
         BotCommand(command="ask", description="Задать вопрос о стиле и моде"),
+        BotCommand(command="ask_with_params", description="Задать вопрос с параметрами"),
         BotCommand(command="db_utils", description="Работа с базой данных"),
         BotCommand(command="help", description="Показать справку")
     ])
@@ -44,6 +53,7 @@ async def on_startup(bot: Bot):
         # Setup commands
         await setup_commands(bot)
         logger.info("Bot commands have been set up")
+        logger.info("Bot started successfully")
     except Exception as e:
         logger.error(f"Error in startup: {e}")
         raise

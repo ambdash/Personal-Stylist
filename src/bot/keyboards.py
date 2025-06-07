@@ -148,8 +148,8 @@ def get_inference_type_keyboard() -> InlineKeyboardMarkup:
     """Get keyboard for inference type selection"""
     keyboard = [
         [
-            InlineKeyboardButton(text="🤖 Обычный", callback_data="inference_regular"),
-            InlineKeyboardButton(text="🧠 Умный", callback_data="inference_rag")
+            InlineKeyboardButton(text="🤖 Обычный", callback_data="regular_inference"),
+            InlineKeyboardButton(text="🧠 Умный", callback_data="rag_inference")
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
@@ -162,7 +162,7 @@ def get_db_utils_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🔗 Добавить связь", callback_data="add_relation")],
         [InlineKeyboardButton(text="✏️ Обновить узел", callback_data="update_node")],
         [InlineKeyboardButton(text="🗑 Удалить узел", callback_data="delete_node")],
-        [InlineKeyboardButton(text="📊 Статус задач", callback_data="check_tasks")]
+        [InlineKeyboardButton(text="🔧 Проверить подключение", callback_data="health_check")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
@@ -180,6 +180,16 @@ def get_node_types_keyboard(include_other: bool = False) -> InlineKeyboardMarkup
     if include_other:
         keyboard.append([InlineKeyboardButton(text="Другое", callback_data="other")])
     
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+def get_relation_types_keyboard() -> InlineKeyboardMarkup:
+    """Get keyboard with relation types"""
+    keyboard = [
+        [InlineKeyboardButton(text="ОТНОСИТСЯ_К", callback_data="ОТНОСИТСЯ_К")],
+        [InlineKeyboardButton(text="ПОДХОДИТ_ДЛЯ", callback_data="ПОДХОДИТ_ДЛЯ")],
+        [InlineKeyboardButton(text="В_СЕЗОНЕ", callback_data="В_СЕЗОНЕ")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back")]
+    ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 def get_back_keyboard() -> InlineKeyboardMarkup:

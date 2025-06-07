@@ -6,8 +6,18 @@ from src.api.db.neo4j.config import neo4j
 from .routes.db_operations import router as db_router
 from .routes.inference import router as inference_router
 from .routes.unified_inference import router as unified_inference_router
+from .routes.telegram_db import router as telegram_db_router
 from prometheus_client import Counter, Histogram
-from prometheus_fastapi_instrumentator import Instrumentator
+
+# Try to import prometheus_fastapi_instrumentator, but make it optional
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator
+    PROMETHEUS_AVAILABLE = True
+except ImportError:
+    print("Warning: prometheus_fastapi_instrumentator not available. Metrics will be disabled.")
+    Instrumentator = None
+    PROMETHEUS_AVAILABLE = False
+
 from celery.result import AsyncResult
 import redis
 import os
@@ -48,9 +58,13 @@ app.add_middleware(
 app.include_router(db_router)
 app.include_router(inference_router)
 app.include_router(unified_inference_router)
+app.include_router(telegram_db_router)
 
-# Add Prometheus metrics
-Instrumentator().instrument(app).expose(app)
+# Add Prometheus metrics if available
+if PROMETHEUS_AVAILABLE and Instrumentator:
+    Instrumentator().instrument(app).expose(app)
+else:
+    logger.info("Prometheus metrics disabled - prometheus_fastapi_instrumentator not available")
 
 @app.get("/")
 async def root():

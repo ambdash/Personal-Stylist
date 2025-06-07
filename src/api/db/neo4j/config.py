@@ -13,9 +13,32 @@ class Neo4jSettings(BaseModel):
     password: str = "password123"
     database: Optional[str] = None
 
+class Neo4jConfig:
+    def __init__(self):
+        # Use localhost for local development, neo4j for Docker
+        self.uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+        self.user = os.getenv("NEO4J_USER", "neo4j")
+        self.password = os.getenv("NEO4J_PASSWORD", "password123")
+        self.database = os.getenv("NEO4J_DATABASE", "neo4j")
+        
+        # Connection settings
+        self.max_connection_lifetime = int(os.getenv("NEO4J_MAX_CONNECTION_LIFETIME", "3600"))
+        self.max_connection_pool_size = int(os.getenv("NEO4J_MAX_CONNECTION_POOL_SIZE", "50"))
+        self.connection_acquisition_timeout = int(os.getenv("NEO4J_CONNECTION_ACQUISITION_TIMEOUT", "60"))
+        
+    def get_connection_params(self) -> dict:
+        """Get connection parameters for Neo4j driver"""
+        return {
+            "uri": self.uri,
+            "auth": (self.user, self.password),
+            "max_connection_lifetime": self.max_connection_lifetime,
+            "max_connection_pool_size": self.max_connection_pool_size,
+            "connection_acquisition_timeout": self.connection_acquisition_timeout,
+        }
+
 class Neo4jConnection:
     def __init__(self):
-        self.uri = os.getenv("NEO4J_URI", "bolt://neo4j:7687")
+        self.uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
         self.user = os.getenv("NEO4J_USER", "neo4j")
         self.password = os.getenv("NEO4J_PASSWORD", "password123")
         self._driver = None

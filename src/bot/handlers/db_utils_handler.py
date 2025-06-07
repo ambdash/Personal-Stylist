@@ -3,42 +3,51 @@ from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from src.bot.states import DbUtilsState
-from src.api.db.neo4j.service import Neo4jService
 from src.bot.keyboards import (
     get_db_utils_keyboard,
     get_node_types_keyboard,
+    get_relation_types_keyboard,
     get_back_keyboard,
     create_inline_keyboard
 )
 from aiogram.types import InlineKeyboardButton
-from src.api.tasks.db_tasks import (
-    create_node,
-    update_node,
-    delete_node,
-    create_relation,
-    search_nodes,
-    search_by_text
-)
+from src.celery_db_app import app as celery_app
 import logging
-import aiohttp
-from typing import Dict, Any, Optional
 import asyncio
 import json
+from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 router = Router()
 
-API_BASE_URL = "http://api:8002"  # Updated to use service name and correct port
-
-async def check_task_status(task_id: str) -> dict:
-    """Check the status of a task"""
-    async with aiohttp.ClientSession() as session:
-        async with session.get(f"{API_BASE_URL}/tasks/{task_id}") as response:
-            return await response.json()
-
-def get_neo4j_service():
-    """Get Neo4j service instance"""
-    return Neo4jService()
+async def wait_for_task_completion(task_id: str, timeout: int = 120) -> Dict[str, Any]:
+    """Wait for Celery task completion with timeout"""
+    task = celery_app.AsyncResult(task_id)
+    
+    # Wait for completion with timeout
+    for _ in range(timeout):
+        if task.state == 'SUCCESS':
+            return {
+                "status": "completed",
+                "result": task.result
+            }
+        elif task.state == 'FAILURE':
+            return {
+                "status": "failed",
+                "error": str(task.info)
+            }
+        elif task.state in ['PENDING', 'STARTED', 'RETRY']:
+            await asyncio.sleep(1)
+        else:
+            return {
+                "status": "unknown",
+                "state": task.state
+            }
+    
+    return {
+        "status": "timeout",
+        "error": "Task timed out"
+    }
 
 @router.message(Command("db_utils"))
 async def cmd_db_utils(message: Message, state: FSMContext):
@@ -51,7 +60,8 @@ async def cmd_db_utils(message: Message, state: FSMContext):
         "• Поиск по словам - текстовый поиск по узлам\n"
         "• Добавить связь - создание связи между узлами\n"
         "• Обновить узел - изменение свойств узла\n"
-        "• Удалить узел - удаление узла",
+        "• Удалить узел - удаление узла\n"
+        "• Проверить подключение - тест соединения с базой данных",
         reply_markup=keyboard
     )
     await state.set_state(DbUtilsState.waiting_for_action)
@@ -103,6 +113,46 @@ async def handle_db_action(callback: CallbackQuery, state: FSMContext):
             "🗑 Введите название узла для удаления:",
             reply_markup=get_back_keyboard()
         )
+    
+    elif action == "health_check":
+        # Test database connection
+        processing_msg = await callback.message.edit_text("🔄 Проверяю подключение к базе данных...")
+        
+        try:
+            # Submit health check task
+            task = celery_app.send_task(
+                'db_worker.health_check',
+                queue='database'
+            )
+            
+            # Wait for result
+            result = await wait_for_task_completion(task.id, timeout=30)
+            
+            if result["status"] == "completed":
+                health_result = result["result"]
+                if health_result.get("success"):
+                    await processing_msg.edit_text(
+                        f"✅ Подключение к базе данных работает!\n\n"
+                        f"📊 Информация:\n"
+                        f"• Соединение: {health_result.get('connection', 'N/A')}\n"
+                        f"• Статус: {health_result.get('message', 'OK')}",
+                        reply_markup=get_db_utils_keyboard()
+                    )
+                else:
+                    await processing_msg.edit_text(
+                        f"❌ Ошибка подключения к базе данных:\n{health_result.get('error', 'Unknown error')}",
+                        reply_markup=get_db_utils_keyboard()
+                    )
+            else:
+                await processing_msg.edit_text(
+                    f"❌ Не удалось проверить подключение: {result.get('error', 'Unknown error')}",
+                    reply_markup=get_db_utils_keyboard()
+                )
+        except Exception as e:
+            await processing_msg.edit_text(
+                f"❌ Ошибка при проверке подключения: {str(e)}",
+                reply_markup=get_db_utils_keyboard()
+            )
 
 @router.message(DbUtilsState.waiting_for_node_name)
 async def process_node_name(message: Message, state: FSMContext):
@@ -119,73 +169,99 @@ async def process_node_name(message: Message, state: FSMContext):
 async def process_node_label(callback: CallbackQuery, state: FSMContext):
     """Process node label selection"""
     data = await state.get_data()
-    node_data = {
-        "name": data["node_name"],
-        "label": callback.data,
-        "aliases": [],
-        "properties": {}
-    }
+    node_name = data["node_name"]
+    node_type = callback.data
     
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            f"{API_BASE_URL}/db/nodes/create",
-            json=node_data
-        ) as response:
-            result = await response.json()
-            task_id = result.get("task_id")
-            
-            # Wait for task completion
-            task_result = await check_task_status(task_id)
-            if task_result.get("status") == "completed":
-                await callback.message.edit_text(
+    processing_msg = await callback.message.edit_text("🔄 Создаю узел...")
+    
+    try:
+        # Submit create node task
+        task = celery_app.send_task(
+            'db_worker.create_node',
+            args=[node_type, {"name": node_name, "id": f"{node_type.lower()}_{node_name.lower().replace(' ', '_')}"}],
+            queue='database'
+        )
+        
+        # Wait for result
+        result = await wait_for_task_completion(task.id)
+        
+        if result["status"] == "completed":
+            task_result = result["result"]
+            if task_result.get("success"):
+                await processing_msg.edit_text(
                     f"✅ Узел успешно создан!\n"
-                    f"Название: {node_data['name']}\n"
-                    f"Тип: {node_data['label']}",
+                    f"Название: {node_name}\n"
+                    f"Тип: {node_type}",
                     reply_markup=get_db_utils_keyboard()
                 )
             else:
-                await callback.message.edit_text(
-                    "❌ Ошибка при создании узла",
+                await processing_msg.edit_text(
+                    f"❌ Ошибка при создании узла: {task_result.get('error', 'Unknown error')}",
                     reply_markup=get_db_utils_keyboard()
                 )
+        else:
+            await processing_msg.edit_text(
+                f"❌ Не удалось создать узел: {result.get('error', 'Unknown error')}",
+                reply_markup=get_db_utils_keyboard()
+            )
+    except Exception as e:
+        await processing_msg.edit_text(
+            f"❌ Ошибка при создании узла: {str(e)}",
+            reply_markup=get_db_utils_keyboard()
+        )
     
     await state.clear()
 
 @router.message(DbUtilsState.waiting_for_search_word)
 async def process_search_word(message: Message, state: FSMContext):
     """Process search word input"""
-    async with aiohttp.ClientSession() as session:
-        async with session.get(
-            f"{API_BASE_URL}/db/search",
-            params={"query": message.text}
-        ) as response:
-            result = await response.json()
-            task_id = result.get("task_id")
+    search_query = message.text.strip()
+    processing_msg = await message.answer("🔄 Ищу в базе данных...")
+    
+    try:
+        # Use HTTP API instead of Celery to avoid SIGSEGV crashes
+        import httpx
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "http://localhost:8000/telegram/db/search",
+                json={"word": search_query, "limit": 20},
+                timeout=30.0
+            )
             
-            # Wait for task completion
-            task_result = await check_task_status(task_id)
-            if task_result.get("status") == "completed":
-                nodes = task_result.get("result", {}).get("nodes", [])
-                if nodes:
-                    response_text = "🔍 Результаты поиска:\n\n"
-                    for node in nodes:
-                        response_text += f"• {node['name']} ({', '.join(node['labels'])})\n"
-                        if node.get('outgoing_relations'):
-                            response_text += "  Связи:\n"
-                            for rel in node['outgoing_relations']:
-                                response_text += f"  → {rel['type']} → {rel['target']}\n"
-                else:
-                    response_text = "❌ Ничего не найдено"
+            if response.status_code == 200:
+                result = response.json()
+                nodes = result.get("nodes", [])
                 
-                await message.answer(
+                if nodes:
+                    response_text = f"🔍 Найдено {len(nodes)} результатов:\n\n"
+                    for i, node in enumerate(nodes[:10], 1):  # Show first 10 results
+                        response_text += f"{i}. {node.get('name', 'Unnamed')}\n"
+                        if node.get('total_connections', 0) > 0:
+                            response_text += f"   Связей: {node['total_connections']}\n"
+                        response_text += "\n"
+                    
+                    if len(nodes) > 10:
+                        response_text += f"... и еще {len(nodes) - 10} результатов"
+                else:
+                    response_text = "😕 Ничего не найдено. Попробуйте другое слово."
+                
+                await processing_msg.edit_text(
                     response_text,
                     reply_markup=get_db_utils_keyboard()
                 )
             else:
-                await message.answer(
-                    "❌ Ошибка при поиске",
+                await processing_msg.edit_text(
+                    f"❌ Ошибка поиска: HTTP {response.status_code}",
                     reply_markup=get_db_utils_keyboard()
                 )
+                
+    except Exception as e:
+        logger.error(f"Search error: {str(e)}")
+        await processing_msg.edit_text(
+            f"❌ Ошибка при поиске: {str(e)}",
+            reply_markup=get_db_utils_keyboard()
+        )
     
     await state.clear()
 
@@ -203,19 +279,16 @@ async def handle_start_node(message: Message, state: FSMContext):
 
 @router.message(DbUtilsState.waiting_for_end_node)
 async def process_end_node(message: Message, state: FSMContext):
-    """Process end node input"""
+    """Process end node for relation"""
     end_node = message.text.strip()
     await state.update_data(end_node=end_node)
     
-    # Predefined relation types
-    relation_types = [
-        ["ПОДХОДИТ_ДЛЯ", "ОТНОСИТСЯ_К"],
-        ["В_СЕЗОНЕ", "СОЧЕТАЕТСЯ_С"]
-    ]
-    keyboard = create_inline_keyboard([
-        [InlineKeyboardButton(text=rel, callback_data=f"rel_{rel}")]
-        for row in relation_types
-        for rel in row
+    # Show relation type options
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="ОТНОСИТСЯ_К", callback_data="ОТНОСИТСЯ_К")],
+        [InlineKeyboardButton(text="ПОДХОДИТ_ДЛЯ", callback_data="ПОДХОДИТ_ДЛЯ")],
+        [InlineKeyboardButton(text="В_СЕЗОНЕ", callback_data="В_СЕЗОНЕ")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="back")]
     ])
     
     await message.answer(
@@ -227,180 +300,70 @@ async def process_end_node(message: Message, state: FSMContext):
 @router.callback_query(DbUtilsState.waiting_for_relation_type)
 async def process_relation_type(callback: CallbackQuery, state: FSMContext):
     """Process relation type selection"""
-    rel_type = callback.data.replace("rel_", "")
+    relation_type = callback.data
     data = await state.get_data()
     
-    task = create_relation.delay(
-        start_node=data['start_node'],
-        end_node=data['end_node'],
-        rel_type=rel_type
-    )
+    processing_msg = await callback.message.edit_text("🔄 Создаю связь...")
     
-    await callback.message.edit_text(
-        f"✅ Создание связи между '{data['start_node']}' и '{data['end_node']}' "
-        f"типа '{rel_type}' запущено.\n"
-        f"ID задачи: {task.id}",
-        reply_markup=get_back_keyboard()
-    )
+    try:
+        # Submit create relationship task
+        task = celery_app.send_task(
+            'db_worker.create_relationship',
+            args=[
+                f"{data['start_node'].lower().replace(' ', '_')}",
+                f"{data['end_node'].lower().replace(' ', '_')}",
+                relation_type
+            ],
+            queue='database'
+        )
+        
+        # Wait for result
+        result = await wait_for_task_completion(task.id)
+        
+        if result["status"] == "completed":
+            task_result = result["result"]
+            if task_result.get("success"):
+                await processing_msg.edit_text(
+                    f"✅ Связь успешно создана!\n"
+                    f"{data['start_node']} → {relation_type} → {data['end_node']}",
+                    reply_markup=get_db_utils_keyboard()
+                )
+            else:
+                await processing_msg.edit_text(
+                    f"❌ Ошибка при создании связи: {task_result.get('error', 'Unknown error')}",
+                    reply_markup=get_db_utils_keyboard()
+                )
+        else:
+            await processing_msg.edit_text(
+                f"❌ Не удалось создать связь: {result.get('error', 'Unknown error')}",
+                reply_markup=get_db_utils_keyboard()
+            )
+    except Exception as e:
+        await processing_msg.edit_text(
+            f"❌ Ошибка при создании связи: {str(e)}",
+            reply_markup=get_db_utils_keyboard()
+        )
+    
     await state.clear()
 
 @router.callback_query(F.data == "back_to_menu")
 async def back_to_menu(callback: CallbackQuery, state: FSMContext):
-    """Handle back to menu button"""
+    """Return to main menu"""
+    await callback.answer()
     await state.clear()
     await callback.message.edit_text(
         "🗄 Выберите операцию с базой данных:",
         reply_markup=get_db_utils_keyboard()
     )
-    await callback.answer()
-
-@router.callback_query(F.data == "delete_node")
-async def process_delete_request(callback: CallbackQuery, state: FSMContext):
-    """Handle delete node request"""
-    await callback.message.edit_text(
-        "Введите ID узла для удаления:",
-        reply_markup=get_back_keyboard()
-    )
-    await state.set_state(DbUtilsState.waiting_for_delete_confirm)
-
-@router.message(DbUtilsState.waiting_for_delete_confirm)
-async def process_delete_confirm(message: Message, state: FSMContext):
-    """Process delete confirmation"""
-    node_id = message.text
-    async with aiohttp.ClientSession() as session:
-        async with session.delete(
-            f"{API_BASE_URL}/db/nodes/{node_id}"
-        ) as response:
-            result = await response.json()
-            task_id = result.get("task_id")
-            
-            # Wait for task completion
-            task_result = await check_task_status(task_id)
-            if task_result.get("status") == "completed":
-                await message.answer(
-                    f"✅ Узел {node_id} успешно удален",
-                    reply_markup=get_db_utils_keyboard()
-                )
-            else:
-                await message.answer(
-                    "❌ Ошибка при удалении узла",
-                    reply_markup=get_db_utils_keyboard()
-                )
-    
-    await state.clear()
+    await state.set_state(DbUtilsState.waiting_for_action)
 
 @router.callback_query(F.data == "back")
 async def process_back(callback: CallbackQuery, state: FSMContext):
     """Handle back button"""
+    await callback.answer()
+    await state.clear()
     await callback.message.edit_text(
-        "Выберите операцию с базой данных:",
+        "🗄 Выберите операцию с базой данных:",
         reply_markup=get_db_utils_keyboard()
     )
-    await state.clear()
-
-@router.callback_query(F.data == "update_node")
-async def process_update_request(callback: CallbackQuery, state: FSMContext):
-    """Handle update node request"""
-    await callback.message.edit_text(
-        "Введите ID узла для обновления:",
-        reply_markup=get_back_keyboard()
-    )
-    await state.set_state(DbUtilsState.waiting_for_update_node)
-
-@router.message(DbUtilsState.waiting_for_update_node)
-async def process_update_node(message: Message, state: FSMContext):
-    """Process node ID for update"""
-    await state.update_data(update_node_id=message.text)
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Название", callback_data="update_name")],
-        [InlineKeyboardButton(text="Алиасы", callback_data="update_aliases")],
-        [InlineKeyboardButton(text="Описание", callback_data="update_description")],
-        [InlineKeyboardButton(text="« Назад", callback_data="back")]
-    ])
-    await message.answer(
-        "Что хотите обновить?",
-        reply_markup=keyboard
-    )
-    await state.set_state(DbUtilsState.waiting_for_update_field)
-
-@router.callback_query(DbUtilsState.waiting_for_update_field)
-async def process_update_field(callback: CallbackQuery, state: FSMContext):
-    """Process update field selection"""
-    field = callback.data.replace("update_", "")
-    await state.update_data(update_field=field)
-    
-    if field == "aliases":
-        await callback.message.edit_text(
-            "Введите алиасы через запятую (например: 'найк белый, nike white'):",
-            reply_markup=get_back_keyboard()
-        )
-    elif field == "description":
-        await callback.message.edit_text(
-            "Введите новое описание:",
-            reply_markup=get_back_keyboard()
-        )
-    else:
-        await callback.message.edit_text(
-            "Введите новое значение:",
-            reply_markup=get_back_keyboard()
-        )
-    
-    await state.set_state(DbUtilsState.waiting_for_update_value)
-
-@router.message(DbUtilsState.waiting_for_update_value)
-async def process_update_value(message: Message, state: FSMContext):
-    """Process update value input"""
-    data = await state.get_data()
-    node_id = data["update_node_id"]
-    field = data["update_field"]
-    value = message.text
-    
-    update_data = {"properties": {}}
-    if field == "name":
-        update_data["name"] = value
-    elif field == "aliases":
-        update_data["aliases"] = [alias.strip() for alias in value.split(",")]
-    elif field == "description":
-        update_data["properties"]["description"] = value
-    
-    async with aiohttp.ClientSession() as session:
-        async with session.put(
-            f"{API_BASE_URL}/db/nodes/{node_id}",
-            json=update_data
-        ) as response:
-            result = await response.json()
-            task_id = result.get("task_id")
-            
-            # Wait for task completion
-            task_result = await check_task_status(task_id)
-            if task_result.get("status") == "completed":
-                await message.answer(
-                    f"✅ Узел успешно обновлен!\n"
-                    f"Поле: {field}\n"
-                    f"Новое значение: {value}",
-                    reply_markup=get_db_utils_keyboard()
-                )
-            else:
-                await message.answer(
-                    "❌ Ошибка при обновлении узла",
-                    reply_markup=get_db_utils_keyboard()
-                )
-    
-    await state.clear()
-
-@router.callback_query(F.data == "check_tasks")
-async def process_check_tasks(callback: CallbackQuery, state: FSMContext):
-    """Handle task status check"""
-    async with aiohttp.ClientSession() as session:
-        async with session.get(f"{API_BASE_URL}/health") as response:
-            health = await response.json()
-            status_text = (
-                "📊 Статус сервисов:\n\n"
-                f"Neo4j: {'✅' if health.get('services', {}).get('neo4j') == 'connected' else '❌'}\n"
-                f"Redis: {'✅' if health.get('services', {}).get('redis') == 'connected' else '❌'}\n"
-                f"Celery: {'✅' if health.get('services', {}).get('celery') == 'connected' else '❌'}"
-            )
-            await callback.message.edit_text(
-                status_text,
-                reply_markup=get_db_utils_keyboard()
-            )
+    await state.set_state(DbUtilsState.waiting_for_action)

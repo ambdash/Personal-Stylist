@@ -1,13 +1,23 @@
 # Build stage
-FROM python:3.10-slim-bullseye AS builder
+FROM nvidia/cuda:11.8-devel-ubuntu20.04 AS builder
 
 WORKDIR /app
 
-# Install build dependencies
+# Install Python and build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-dev \
+    python3.11-venv \
+    python3-pip \
     gcc \
+    g++ \
     libc6-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Create symlinks for python
+RUN ln -s /usr/bin/python3.11 /usr/bin/python && \
+    ln -s /usr/bin/python3.11 /usr/bin/python3
 
 # Copy only requirements first
 COPY requirements.txt ./
@@ -18,33 +28,48 @@ RUN python -m venv /opt/venv && \
     pip install --no-cache-dir -r requirements.txt
 
 # Final stage
-FROM python:3.10-slim-bullseye
+FROM nvidia/cuda:11.8-runtime-ubuntu20.04
 
 WORKDIR /app
+
+# Install Python runtime
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-venv \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create symlinks for python
+RUN ln -s /usr/bin/python3.11 /usr/bin/python && \
+    ln -s /usr/bin/python3.11 /usr/bin/python3
 
 # Copy virtual environment from builder stage
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
+# Create model directories
+RUN mkdir -p /app/src/ml/models/finetuned/t_lite \
+    /app/data/models/cache
+
 # Set environment variables
 ENV PYTHONPATH=/app \
-    C_FORCE_ROOT=true
+    C_FORCE_ROOT=true \
+    CUDA_VISIBLE_DEVICES=0
 
 # Create non-root user
-RUN useradd -m celery && \
-    chown -R celery:celery /app
+RUN useradd -m celeryuser && \
+    chown -R celeryuser:celeryuser /app
 
 # Switch to non-root user
-USER celery
+USER celeryuser
 
 # Copy necessary files
-COPY --chown=celery:celery src/celery_app.py src/
-COPY --chown=celery:celery src/api/tasks/ src/api/tasks/
-COPY --chown=celery:celery src/api/db/ src/api/db/
+COPY --chown=celeryuser:celeryuser src/ src/
+COPY --chown=celeryuser:celeryuser scripts/ scripts/
 
-# Add healthcheck
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD celery -A src.celery_app inspect ping -d celery@$HOSTNAME || exit 1
+# Add healthcheck script
+COPY --chown=celeryuser:celeryuser docker/healthcheck.sh /app/healthcheck.sh
+RUN chmod +x /app/healthcheck.sh
 
-# Start command
-CMD ["celery", "-A", "src.celery_app", "worker", "--loglevel=info", "-Q", "llm,db"] 
+# Default command (will be overridden in docker-compose)
+CMD ["celery", "-A", "src.celery_app", "worker", "--loglevel=info"]

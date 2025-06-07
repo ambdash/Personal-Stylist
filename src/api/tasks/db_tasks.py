@@ -1,4 +1,4 @@
-from src.celery_app import celery_app
+from src.celery_app import app as celery_app
 from src.api.db.neo4j.service import Neo4jService
 from src.api.db.neo4j.config import neo4j
 from typing import Dict, Any, Optional, List

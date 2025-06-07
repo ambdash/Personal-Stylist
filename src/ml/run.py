@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 import logging
 import os
-import wandb
+# import wandb  # Temporarily commented out
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "7"
 import torch
@@ -79,18 +79,19 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Initialize wandb if not disabled
-    if not args.no_wandb:
-        wandb.init(
-            project=args.wandb_project,
-            name=args.run_name,
-            config={
-                "model": args.model,
-                "mode": args.mode,
-                "data_dir": args.data_dir,
-                "output_dir": str(output_dir),
-                "adapter_path": args.adapter_path
-            }
-        )
+    # Temporarily commented out wandb initialization
+    # if not args.no_wandb:
+    #     wandb.init(
+    #         project=args.wandb_project,
+    #         name=args.run_name,
+    #         config={
+    #             "model": args.model,
+    #             "mode": args.mode,
+    #             "data_dir": args.data_dir,
+    #             "output_dir": str(output_dir),
+    #             "adapter_path": args.adapter_path
+    #         }
+    #     )
     
     try:
         if args.mode == "train":
@@ -117,8 +118,8 @@ def main():
             )
             
             # Log training metrics if wandb is enabled
-            if not args.no_wandb:
-                wandb.log(metrics)
+            # if not args.no_wandb:
+            #     wandb.log(metrics)
             
         elif args.mode == "test":
             # Load test dataset with model-specific path
@@ -164,15 +165,16 @@ def main():
             )
             
             # Log evaluation metrics if wandb is enabled
-            if not args.no_wandb:
-                wandb.log(metrics)
+            # if not args.no_wandb:
+            #     wandb.log(metrics)
         
         logger.info("Pipeline completed successfully")
         
     finally:
         # Always finish wandb run if it was initialized
-        if not args.no_wandb:
-            wandb.finish()
+        pass
+        # if not args.no_wandb:
+        #     wandb.finish()
 
 if __name__ == "__main__":
     main() 

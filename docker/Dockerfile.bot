@@ -3,7 +3,7 @@ FROM python:3.11-slim-bullseye as builder
 
 WORKDIR /app
 
-# Configure apt and install build dependencies
+# Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libc6-dev \
@@ -32,36 +32,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Create model directories
-RUN mkdir -p /app/src/ml/models/finetuned/t_lite \
-    /app/data/models/cache \
-    /tmp/prometheus_multiproc \
-    /tmp/prometheus
-
 # Copy project files
 COPY src/ src/
 COPY scripts/ scripts/
 
 # Set environment variables
-ENV PYTHONPATH=/app \
-    PORT=8002 \
-    PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc \
-    PROMETHEUS_DIR=/tmp/prometheus
-
-# Create directories with proper permissions
-RUN chmod -R 777 /tmp/prometheus_multiproc /tmp/prometheus /app/data/models
+ENV PYTHONPATH=/app
 
 # Create non-root user
-RUN useradd -m apiuser && \
-    chown -R apiuser:apiuser /app /tmp/prometheus_multiproc /tmp/prometheus
-USER apiuser
+RUN useradd -m botuser && \
+    chown -R botuser:botuser /app
+USER botuser
 
 # Health check
-COPY --chown=apiuser:apiuser docker/healthcheck.sh /app/healthcheck.sh
-RUN chmod +x /app/healthcheck.sh
-
-# Expose port
-EXPOSE 8002
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD python -c "import sys; sys.exit(0)"
 
 # Start command
-CMD ["python", "-m", "uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8002"]
+CMD ["python", "-m", "src.bot.main"] 

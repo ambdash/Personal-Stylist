@@ -4,6 +4,7 @@ from src.api.utils.triple_extractor import TripleExtractor
 import logging
 from neo4j import GraphDatabase
 import time
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -11,40 +12,34 @@ class Neo4jService:
     def __init__(self):
         self.triple_extractor = TripleExtractor()
         self.neo4j = neo4j
-        self.uri = "bolt://neo4j:7687"
-        self.user = "neo4j"
-        self.password = "password123"
-        self._driver = None
+        # Use localhost for local development, neo4j for Docker
+        self.uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+        self.user = os.getenv("NEO4J_USER", "neo4j")
+        self.password = os.getenv("NEO4J_PASSWORD", "password123")
+        self.driver = None
         self._max_retries = 3
         self._retry_delay = 2
         self._connect()
 
     def _connect(self):
-        """Initialize Neo4j driver with retries"""
-        retries = 0
-        while retries < self._max_retries:
-            try:
-                self._driver = GraphDatabase.driver(
-                    self.uri,
-                    auth=(self.user, self.password)
-                )
-                # Test connection
-                with self._driver.session() as session:
-                    session.run("RETURN 1")
-                logger.info(f"Successfully connected to Neo4j at {self.uri}")
-                return
-            except Exception as e:
-                retries += 1
-                if retries == self._max_retries:
-                    logger.error(f"Failed to connect to Neo4j after {self._max_retries} attempts: {str(e)}")
-                    raise
-                logger.warning(f"Connection attempt {retries} failed, retrying in {self._retry_delay} seconds...")
-                time.sleep(self._retry_delay)
+        """Establish connection to Neo4j"""
+        try:
+            self.driver = GraphDatabase.driver(
+                self.uri,
+                auth=(self.user, self.password)
+            )
+            # Test connection
+            with self.driver.session() as session:
+                session.run("RETURN 1")
+            logger.info(f"Successfully connected to Neo4j at {self.uri}")
+        except Exception as e:
+            logger.error(f"Failed to connect to Neo4j: {str(e)}")
+            raise
 
     def execute_query(self, query: str, parameters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """Execute a Cypher query and return results"""
         try:
-            with self._driver.session() as session:
+            with self.driver.session() as session:
                 result = session.run(query, parameters or {})
                 return [dict(record) for record in result]
         except Exception as e:
@@ -286,6 +281,6 @@ class Neo4jService:
 
     def close(self):
         """Close the Neo4j connection"""
-        if self._driver:
-            self._driver.close()
-            self._driver = None
+        if self.driver:
+            self.driver.close()
+            self.driver = None

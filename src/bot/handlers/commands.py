@@ -4,7 +4,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from src.bot.keyboards import get_main_keyboard, get_inference_type_keyboard, get_db_utils_keyboard, get_node_types_keyboard
 from src.bot.states import UnifiedInferenceState, DbUtilsState
-from src.bot.services.neo4j_service import search_nodes_by_word, get_style_recommendations, get_node_by_type, add_node
+from src.bot.services.api_client import api_client
 from src.bot.services.metrics_service import track_request
 import logging
 
@@ -108,9 +108,16 @@ async def process_db_action(callback: CallbackQuery, state: FSMContext):
 
 @router.message(DbUtilsState.waiting_for_search_word)
 async def process_search_word(message: Message, state: FSMContext):
-    """Process word search in database"""
+    """Process word search in database via API"""
     word = message.text.strip()
-    result = await search_nodes_by_word(word)
+    
+    # Show processing message
+    processing_msg = await message.answer("🔄 Поиск через API...")
+    
+    result = await api_client.search_nodes_by_word(word)
+    
+    # Delete processing message
+    await processing_msg.delete()
     
     if not result["found"]:
         await message.answer(
@@ -118,22 +125,57 @@ async def process_search_word(message: Message, state: FSMContext):
         )
         return
     
-    response = "🔍 Результаты поиска:\n\n"
-    for node in result["nodes"]:
-        response += f"📌 {node['name']}\n"
+    response = f"🔍 Найдено {len(result['nodes'])} результатов для '{word}' (через API):\n\n"
+    for i, node in enumerate(result["nodes"], 1):
+        # Escape special markdown characters in node name
+        node_name = node['name'].replace('*', '\\*').replace('_', '\\_').replace('[', '\\[').replace(']', '\\]').replace('`', '\\`')
+        response += f"{i}. 📌 *{node_name}*\n"
+        response += f"   🔗 Связей: {node.get('total_connections', 0)}\n"
+        
         if node.get('connections'):
-            response += "   Связи:\n"
-            for conn in node['connections']:
-                response += f"   • {conn}\n"
+            response += "   📋 Связи:\n"
+            for conn in node['connections'][:5]:  # Show max 5 connections
+                if conn.get('name') and conn.get('relation'):
+                    # Escape special characters in connection names
+                    conn_name = conn['name'].replace('*', '\\*').replace('_', '\\_').replace('[', '\\[').replace(']', '\\]').replace('`', '\\`')
+                    conn_relation = conn['relation'].replace('*', '\\*').replace('_', '\\_').replace('[', '\\[').replace(']', '\\]').replace('`', '\\`')
+                    response += f"   • {conn_relation} → {conn_name}\n"
+            
+            if len(node['connections']) > 5:
+                response += f"   ... и ещё {len(node['connections']) - 5} связей\n"
+        else:
+            response += "   📋 Связей нет\n"
+        
+        response += "\n"
     
-    await message.answer(response)
+    # Send without markdown if the response is too long or complex
+    if len(response) > 4000:
+        await message.answer("Результат слишком большой. Показываю первые несколько результатов...")
+        # Truncate response
+        response = response[:3500] + "\n\n... (результаты обрезаны)"
+    
+    try:
+        await message.answer(response, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Markdown parsing error: {e}")
+        # Fallback to plain text
+        plain_response = response.replace('*', '').replace('_', '').replace('\\', '')
+        await message.answer(plain_response)
+    
     await state.clear()
 
 @router.message(DbUtilsState.waiting_for_node_type)
 async def process_node_type(message: Message, state: FSMContext):
-    """Process node type input"""
+    """Process node type input via API"""
     node_type = message.text.strip()
-    nodes = await get_node_by_type(node_type)
+    
+    # Show processing message
+    processing_msg = await message.answer("🔄 Получение узлов через API...")
+    
+    nodes = await api_client.get_nodes_by_type(node_type)
+    
+    # Delete processing message
+    await processing_msg.delete()
     
     if not nodes:
         await message.answer(
@@ -141,7 +183,7 @@ async def process_node_type(message: Message, state: FSMContext):
         )
         return
     
-    response = f"📂 Узлы типа '{node_type}':\n\n"
+    response = f"📂 Узлы типа '{node_type}' (через API):\n\n"
     for node in nodes:
         response += f"• {node['name']}\n"
     
@@ -162,7 +204,7 @@ async def process_node_name(message: Message, state: FSMContext):
 
 @router.callback_query(DbUtilsState.waiting_for_new_node_type)
 async def process_new_node_type_callback(callback: CallbackQuery, state: FSMContext):
-    """Process new node type from callback"""
+    """Process new node type from callback via API"""
     node_type = callback.data
     data = await state.get_data()
     node_name = data.get("node_name")
@@ -173,7 +215,13 @@ async def process_new_node_type_callback(callback: CallbackQuery, state: FSMCont
         )
         return
     
-    result = await add_node(node_name, node_type)
+    # Show processing message
+    processing_msg = await callback.message.answer("🔄 Создание узла через API...")
+    
+    result = await api_client.add_node(node_name, node_type)
+    
+    # Delete processing message
+    await processing_msg.delete()
     
     if not result["success"]:
         await callback.message.answer(
@@ -181,7 +229,7 @@ async def process_new_node_type_callback(callback: CallbackQuery, state: FSMCont
         )
     else:
         await callback.message.answer(
-            f"✅ Узел '{node_name}' типа '{node_type}' успешно добавлен!"
+            f"✅ Узел '{node_name}' типа '{node_type}' успешно добавлен через API!"
         )
     
     await callback.answer()

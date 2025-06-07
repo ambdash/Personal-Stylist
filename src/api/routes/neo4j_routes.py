@@ -1,9 +1,10 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from typing import Dict, Any, List, Optional
 from ..services.neo4j_service import Neo4jService
 from pydantic import BaseModel
 from ..db.neo4j_config import neo4j_connection
-from src.celery_app import celery_app
+from src.celery_app import app as celery_app
 import logging
 
 router = APIRouter(prefix="/neo4j", tags=["neo4j"])

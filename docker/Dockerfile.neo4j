@@ -1,4 +1,4 @@
-FROM neo4j:5.7
+FROM neo4j:5.15
 
 # Install Python and pip
 RUN apt-get update && apt-get install -y \
@@ -36,11 +36,23 @@ COPY src/api/db/neo4j/init_docker.py /var/lib/neo4j/import/
 COPY docker/init.sh /var/lib/neo4j/
 RUN chmod +x /var/lib/neo4j/init.sh
 
+# Install APOC plugin
+RUN wget -O /var/lib/neo4j/plugins/apoc-5.15.0-core.jar \
+    https://github.com/neo4j-contrib/neo4j-apoc-procedures/releases/download/5.15.0/apoc-5.15.0-core.jar
+
+# Set environment variables
+ENV NEO4J_AUTH=neo4j/password123
+ENV NEO4J_PLUGINS=["apoc"]
+ENV NEO4J_dbms_security_procedures_unrestricted=apoc.*
+ENV NEO4J_dbms_security_procedures_allowlist=apoc.*
+ENV NEO4J_dbms_memory_heap_initial__size=1G
+ENV NEO4J_dbms_memory_heap_max__size=2G
+
 # Expose ports
 EXPOSE 7474 7687
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=30s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=5 \
     CMD curl -f http://localhost:7474 || exit 1
 
 # Set the entrypoint to run initialization

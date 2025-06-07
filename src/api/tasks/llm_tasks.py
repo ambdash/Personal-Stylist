@@ -1,4 +1,4 @@
-from src.celery_app import celery_app
+from src.celery_app import app as celery_app
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 from typing import Dict, Any, Optional

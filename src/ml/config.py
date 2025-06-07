@@ -4,9 +4,29 @@
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 import os
-import torch
-from transformers import BitsAndBytesConfig
 from pathlib import Path
+
+# Try to import torch and transformers, but make them optional
+try:
+    import torch
+    # Check if torch version is compatible
+    torch_version = torch.__version__
+    torch_major, torch_minor = map(int, torch_version.split('.')[:2])
+    
+    if torch_major >= 2 and torch_minor >= 1:
+        from transformers import BitsAndBytesConfig
+        TORCH_AVAILABLE = True
+        TORCH_COMPATIBLE = True
+    else:
+        print(f"Warning: PyTorch version {torch_version} is not compatible (requires 2.1+)")
+        BitsAndBytesConfig = None
+        TORCH_AVAILABLE = True
+        TORCH_COMPATIBLE = False
+except ImportError:
+    torch = None
+    BitsAndBytesConfig = None
+    TORCH_AVAILABLE = False
+    TORCH_COMPATIBLE = False
 
 # Set up model directories
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -114,139 +134,162 @@ MODEL_DOWNLOAD_LINKS = {
 # Create quantization config
 def get_quantization_config():
     """Get optimized quantization config for QLoRA."""
-    return BitsAndBytesConfig(
-        load_in_8bit=True,
-        llm_int8_threshold=6.0,
-        llm_int8_has_fp16_weight=False,
-        # load_in_4bit=True,  # Use 4-bit quantization for QLoRA
-        # bnb_4bit_use_double_quant=True,
-        # bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16
-    )
+    if not TORCH_AVAILABLE or not TORCH_COMPATIBLE or not BitsAndBytesConfig:
+        return None
+    
+    try:
+        return BitsAndBytesConfig(
+            load_in_8bit=True,
+            llm_int8_threshold=6.0,
+            llm_int8_has_fp16_weight=False,
+            # load_in_4bit=True,  # Use 4-bit quantization for QLoRA
+            # bnb_4bit_use_double_quant=True,
+            # bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16 if (TORCH_AVAILABLE and TORCH_COMPATIBLE and torch) else None
+        )
+    except Exception as e:
+        print(f"Warning: Could not create quantization config: {e}")
+        return None
 
-MODEL_CONFIGS = {
-    "mistralai/Mistral-7B-v0.1": {
-        "name": "mistralai/Mistral-7B-v0.1",
-        "model_args": {
-            "trust_remote_code": True,
-            "max_length": MAX_LENGTH,
-            "cache_dir": CACHE_DIR,
-            "device_map": "auto",
-            "torch_dtype": torch.bfloat16,
+def get_model_args_with_torch():
+    """Get model args that require torch"""
+    base_args = {
+        "trust_remote_code": True,
+        "max_length": MAX_LENGTH,
+        "cache_dir": CACHE_DIR,
+    }
+    
+    if not TORCH_AVAILABLE:
+        return base_args
+    
+    torch_args = {
+        "device_map": "auto",
+    }
+    
+    if TORCH_COMPATIBLE:
+        torch_args.update({
+            "torch_dtype": torch.bfloat16 if (TORCH_AVAILABLE and torch) else None,
             "quantization_config": get_quantization_config()
+        })
+    else:
+        # For older torch versions, use basic float16
+        torch_args.update({
+            "torch_dtype": torch.float16 if (TORCH_AVAILABLE and torch) else None,
+        })
+    
+    return {**base_args, **torch_args}
+
+def get_model_configs():
+    """Get model configurations lazily to avoid import-time torch calls"""
+    return {
+        "mistralai/Mistral-7B-v0.1": {
+            "name": "mistralai/Mistral-7B-v0.1",
+            "model_args": get_model_args_with_torch(),
+            "lora_config": {
+                "r": 16,
+                "lora_alpha": 32,
+                "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj"],
+                "lora_dropout": 0.05,
+                "bias": "none",
+                "task_type": "CAUSAL_LM"
+            },
+            "training_args": {
+                "num_train_epochs": 3,
+                "per_device_train_batch_size": 2,
+                "gradient_accumulation_steps": 4,
+                "learning_rate": 2e-4,
+                "fp16": True,
+                "logging_steps": 10,
+                "save_strategy": "epoch",
+                "eval_strategy": "no",
+            }
         },
-        "lora_config": {
-            "r": 16,
-            "lora_alpha": 32,
-            "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj"],
-            "lora_dropout": 0.05,
-            "bias": "none",
-            "task_type": "CAUSAL_LM"
+        "IlyaGusev/saiga2_7b_lora": {
+            "name": "IlyaGusev/saiga2_7b_lora",
+            "model_args": get_model_args_with_torch(),
+            "lora_config": {
+                "r": 16,
+                "lora_alpha": 32,
+                "target_modules": ["q_proj", "v_proj", "k_proj", "o_proj"],
+                "lora_dropout": 0.05,
+                "bias": "none",
+                "task_type": "CAUSAL_LM"
+            },
+            "training_args": {
+                "num_train_epochs": 3,
+                "per_device_train_batch_size": 4,
+                "gradient_accumulation_steps": 4,
+                "learning_rate": 2e-4,
+                "fp16": True,
+                "logging_steps": 10,
+                "save_strategy": "epoch",
+                "evaluation_strategy": "epoch",
+                "ddp_find_unused_parameters": False,
+                "ddp_backend": "nccl",
+                "local_rank": -1
+            }
         },
-        "training_args": {
-            "num_train_epochs": 3,
-            "per_device_train_batch_size": 2,
-            "gradient_accumulation_steps": 4,
-            "learning_rate": 2e-4,
-            "fp16": True,
-            "logging_steps": 10,
-            "save_strategy": "epoch",
-            "eval_strategy": "no",
-        }
-    },
-    "IlyaGusev/saiga2_7b_lora": {
-        "name": "IlyaGusev/saiga2_7b_lora",
-        "model_args": {
-            "device_map": "auto",
-            "torch_dtype": torch.bfloat16,
-            "max_length": MAX_LENGTH,
-            "cache_dir": CACHE_DIR,
-            "quantization_config": get_quantization_config()
+        "IlyaGusev/saiga_mistral_7b": {
+            "name": "IlyaGusev/saiga_mistral_7b",
+            "model_args": get_model_args_with_torch(),
+            "lora_config": {
+                "r": 16,
+                "lora_alpha": 32,
+                "target_modules": ["q_proj", "v_proj", "k_proj", "o_proj"],
+                "lora_dropout": 0.05,
+                "bias": "none",
+                "task_type": "CAUSAL_LM"
+            },
+            "training_args": {
+                "num_train_epochs": 3,
+                "per_device_train_batch_size": 4,
+                "gradient_accumulation_steps": 4,
+                "learning_rate": 2e-4,
+            }
         },
-        "lora_config": {
-            "r": 16,
-            "lora_alpha": 32,
-            "target_modules": ["q_proj", "v_proj", "k_proj", "o_proj"],
-            "lora_dropout": 0.05,
-            "bias": "none",
-            "task_type": "CAUSAL_LM"
-        },
-        "training_args": {
-            "num_train_epochs": 3,
-            "per_device_train_batch_size": 4,
-            "gradient_accumulation_steps": 4,
-            "learning_rate": 2e-4,
-            "fp16": True,
-            "logging_steps": 10,
-            "save_strategy": "epoch",
-            "evaluation_strategy": "epoch",
-            "ddp_find_unused_parameters": False,
-            "ddp_backend": "nccl",
-            "local_rank": -1
-        }
-    },
-    "IlyaGusev/saiga_mistral_7b": {
-        "name": "IlyaGusev/saiga_mistral_7b",
-        "model_args": {
-            "device_map": "auto",
-            "torch_dtype": torch.bfloat16,
-            "max_length": MAX_LENGTH,
-            "cache_dir": CACHE_DIR,
-            "quantization_config": get_quantization_config()
-        },
-        "lora_config": {
-            "r": 16,
-            "lora_alpha": 32,
-            "target_modules": ["q_proj", "v_proj", "k_proj", "o_proj"],
-            "lora_dropout": 0.05,
-            "bias": "none",
-            "task_type": "CAUSAL_LM"
-        },
-        "training_args": {
-            "num_train_epochs": 3,
-            "per_device_train_batch_size": 4,
-            "gradient_accumulation_steps": 4,
-            "learning_rate": 2e-4,
-        }
-    },
-    "t-tech/T-lite-it-1.0": {
-        "name": "t-tech/T-lite-it-1.0",
-        "model_args": {
-            "trust_remote_code": True,
-            "max_length": MAX_LENGTH,
-            "cache_dir": CACHE_DIR,
-            # "device_map": None,
-            "torch_dtype": torch.float16,
-            "quantization_config": get_quantization_config()
-        },
-        "lora_config": {
-            "r": 32,  # Increased rank for better performance
-            "lora_alpha": 64,  # Increased alpha for better stability
-            "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],  # Added more target modules
-            "lora_dropout": 0.1,  # Increased dropout for better regularization
-            "bias": "none",
-            "task_type": "CAUSAL_LM"
-        },
-        "training_args": {
-            "num_train_epochs": 1,
-            "per_device_train_batch_size": 4,
-            "gradient_accumulation_steps": 8,  # Increased for better stability
-            "learning_rate": 2e-4,
-            "fp16": True,  # Disabled fp16 as we're using bf16
-            # "bf16": True,  # Using bf16 for better stability
-            "logging_steps": 10,
-            "save_strategy": "epoch",
-            "eval_strategy": "no",
-            "warmup_ratio": 0.1,
-            "weight_decay": 0.01,
-            "gradient_checkpointing": True,
-            "optim": "adamw_torch",
-            "lr_scheduler_type": "cosine",
-            "max_grad_norm": 1.0,
-            "dataloader_num_workers": 4,
-            "dataloader_pin_memory": True,
-            "remove_unused_columns": False,
-            "dataloader_num_workers": 0
+        "t-tech/T-lite-it-1.0": {
+            "name": "t-tech/T-lite-it-1.0",
+            "model_args": {
+                "trust_remote_code": True,
+                "max_length": MAX_LENGTH,
+                "cache_dir": CACHE_DIR,
+                # Only add torch-specific args if torch is available and compatible
+                **({
+                    "torch_dtype": torch.float16 if (TORCH_AVAILABLE and TORCH_COMPATIBLE and torch) else (torch.float16 if (TORCH_AVAILABLE and torch) else None),
+                    "quantization_config": get_quantization_config()
+                } if TORCH_AVAILABLE else {})
+            },
+            "lora_config": {
+                "r": 32,  # Increased rank for better performance
+                "lora_alpha": 64,  # Increased alpha for better stability
+                "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],  # Added more target modules
+                "lora_dropout": 0.1,  # Increased dropout for better regularization
+                "bias": "none",
+                "task_type": "CAUSAL_LM"
+            },
+            "training_args": {
+                "num_train_epochs": 1,
+                "per_device_train_batch_size": 4,
+                "gradient_accumulation_steps": 8,  # Increased for better stability
+                "learning_rate": 2e-4,
+                "fp16": True,  # Disabled fp16 as we're using bf16
+                # "bf16": True,  # Using bf16 for better stability
+                "logging_steps": 10,
+                "save_strategy": "epoch",
+                "eval_strategy": "no",
+                "warmup_ratio": 0.1,
+                "weight_decay": 0.01,
+                "gradient_checkpointing": True,
+                "optim": "adamw_torch",
+                "lr_scheduler_type": "cosine",
+                "max_grad_norm": 1.0,
+                "dataloader_num_workers": 4,
+                "dataloader_pin_memory": True,
+                "remove_unused_columns": False,
+                "dataloader_num_workers": 0
+            }
         }
     }
-} 
+
+# For backward compatibility
+MODEL_CONFIGS = get_model_configs 
