@@ -2,6 +2,10 @@ from celery import Celery
 import os
 from pathlib import Path
 import sys
+import multiprocessing
+
+# Set multiprocessing start method to spawn to avoid CUDA fork issues
+multiprocessing.set_start_method('spawn', force=True)
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
@@ -27,8 +31,8 @@ app = Celery(
 app.conf.update(
     # Task routing
     task_routes={
-        'src.workers.inference_worker.*': {'queue': 'inference'},
-        'src.workers.db_worker.*': {'queue': 'database'},
+        'inference_worker.*': {'queue': 'inference'},
+        'db_worker.*': {'queue': 'database'},
     },
     
     # Result backend settings
@@ -42,7 +46,8 @@ app.conf.update(
     timezone='UTC',
     enable_utc=True,
     
-    # Worker settings
+    # Worker settings - use spawn for multiprocessing to avoid CUDA fork issues
+    worker_pool='solo',  # Use solo pool for GPU workers to avoid multiprocessing issues
     worker_prefetch_multiplier=1,
     task_acks_late=True,
     worker_max_tasks_per_child=1000,

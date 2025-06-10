@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, Dict, Any, List
 from src.ml.config import MODEL_CONFIGS, SYSTEM_PROMPT
 from src.celery_app import app as celery_app
@@ -29,16 +29,38 @@ INFERENCE_LATENCY = Histogram(
 
 class InferenceParameters(BaseModel):
     """Configurable inference parameters"""
-    temperature: float = 0.7
-    top_p: float = 0.9
-    top_k: int = 40
-    repetition_penalty: float = 1.2
-    max_new_tokens: int = 512
+    model_config = ConfigDict(protected_namespaces=())
+    
+    temperature: float = 0.5      # Less creative, more consistent
+    top_p: float = 0.8           # More focused word selection
+    top_k: int = 30              # Fewer word options
+    repetition_penalty: float = 1.1  # Less aggressive repetition penalty
+    max_new_tokens: int = 256        # Shorter responses
     max_length: int = 2048
     do_sample: bool = True
     num_beams: int = 1
 
+class RagInfo(BaseModel):
+    """Enhanced RAG information model"""
+    model_config = ConfigDict(protected_namespaces=())
+    
+    enhanced: bool
+    strategy_used: Optional[str] = None
+    original_prompt: Optional[str] = None
+    enhanced_prompt: Optional[str] = None
+    concepts_found: int = 0
+    concepts: List[Dict[str, Any]] = []
+    key_nodes: Dict[str, List[Dict[str, Any]]] = {}
+    item_type: Optional[str] = None
+    item_subtype: Optional[str] = None
+    is_styling: bool = False
+    styling_item: Optional[str] = None
+    processing_time: float = 0.0
+    reason: Optional[str] = None
+
 class UnifiedInferenceRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+    
     prompt: str
     use_rag: bool = False
     model_name: str = "t-tech/T-lite-it-1.0"  # Default to T-lite model
@@ -47,12 +69,14 @@ class UnifiedInferenceRequest(BaseModel):
     parameters: Optional[InferenceParameters] = None
 
 class UnifiedInferenceResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+    
     generated_text: str
     processing_time: float
     generation_time: float
     model_used: str
     parameters: Dict[str, Any]
-    rag_info: Optional[Dict[str, Any]] = None
+    rag_info: Optional[RagInfo] = None
     task_id: str
 
 @router.post("/generate", response_model=UnifiedInferenceResponse)
@@ -98,13 +122,44 @@ async def generate_text(request: UnifiedInferenceRequest) -> UnifiedInferenceRes
         processing_time = time.time() - start_time
         INFERENCE_LATENCY.labels(inference_type=inference_type).observe(processing_time)
 
+        # Enhanced RAG info processing
+        rag_info = None
+        if task_result.get("rag_info"):
+            raw_rag_info = task_result["rag_info"]
+            
+            # Determine strategy used based on RAG result
+            strategy_used = None
+            if raw_rag_info.get("enhanced"):
+                if raw_rag_info.get("item_type") or raw_rag_info.get("is_styling"):
+                    strategy_used = "item_type_or_styling"
+                elif len(raw_rag_info.get("concepts", [])) == 1:
+                    strategy_used = "single_keynode_random"
+                else:
+                    strategy_used = "keynode_intersections"
+            
+            rag_info = RagInfo(
+                enhanced=raw_rag_info.get("enhanced", False),
+                strategy_used=strategy_used,
+                original_prompt=raw_rag_info.get("original_prompt"),
+                enhanced_prompt=raw_rag_info.get("enhanced_prompt"),
+                concepts_found=len(raw_rag_info.get("concepts", [])),
+                concepts=raw_rag_info.get("concepts", []),
+                key_nodes=raw_rag_info.get("key_nodes", {}),
+                item_type=raw_rag_info.get("item_type"),
+                item_subtype=raw_rag_info.get("item_subtype"),
+                is_styling=raw_rag_info.get("is_styling", False),
+                styling_item=raw_rag_info.get("styling_item"),
+                processing_time=raw_rag_info.get("processing_time", 0.0),
+                reason=raw_rag_info.get("reason")
+            )
+
         return UnifiedInferenceResponse(
             generated_text=task_result["generated_text"],
             processing_time=task_result["processing_time"],
             generation_time=task_result["generation_time"],
             model_used=task_result["model_used"],
             parameters=task_result["parameters"],
-            rag_info=task_result.get("rag_info"),
+            rag_info=rag_info,
             task_id=task.id
         )
 

@@ -7,6 +7,7 @@ from .routes.db_operations import router as db_router
 from .routes.inference import router as inference_router
 from .routes.unified_inference import router as unified_inference_router
 from .routes.telegram_db import router as telegram_db_router
+from .routes.rag import router as rag_router
 from prometheus_client import Counter, Histogram
 
 # Try to import prometheus_fastapi_instrumentator, but make it optional
@@ -31,10 +32,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Initialize Redis connection
+redis_password = os.getenv("REDIS_PASSWORD", "")
 redis_client = redis.Redis(
     host=os.getenv("REDIS_HOST", "localhost"),
     port=int(os.getenv("REDIS_PORT", 6379)),
-    password=os.getenv("REDIS_PASSWORD", "redis_password"),
+    password=redis_password if redis_password else None,
     decode_responses=True
 )
 
@@ -59,6 +61,7 @@ app.include_router(db_router)
 app.include_router(inference_router)
 app.include_router(unified_inference_router)
 app.include_router(telegram_db_router)
+app.include_router(rag_router)
 
 # Add Prometheus metrics if available
 if PROMETHEUS_AVAILABLE and Instrumentator:

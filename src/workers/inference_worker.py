@@ -44,11 +44,11 @@ def generate_text(
         
         # Default parameters
         default_params = {
-            "temperature": 0.7,
-            "top_p": 0.9,
-            "top_k": 40,
-            "repetition_penalty": 1.2,
-            "max_new_tokens": 512,
+            "temperature": 0.5,      # Less creative, more consistent
+            "top_p": 0.8,           # More focused word selection
+            "top_k": 30,            # Fewer word options
+            "repetition_penalty": 1.1,  # Less aggressive repetition penalty
+            "max_new_tokens": 256,      # Shorter responses
             "max_length": 2048,
             "do_sample": True,
             "num_beams": 1

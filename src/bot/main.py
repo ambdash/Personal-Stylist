@@ -33,9 +33,9 @@ bot = Bot(token=TELEGRAM_BOT_TOKEN)
 dp = Dispatcher()
 
 # Register routers
+dp.include_router(unified_inference_handler.router)
 dp.include_router(commands.router)
 dp.include_router(db_utils_handler.router)
-dp.include_router(unified_inference_handler.router)
 
 async def setup_commands(bot: Bot):
     """Setup bot commands"""
@@ -43,6 +43,7 @@ async def setup_commands(bot: Bot):
         BotCommand(command="start", description="Начать работу с ботом"),
         BotCommand(command="ask", description="Задать вопрос о стиле и моде"),
         BotCommand(command="ask_with_params", description="Задать вопрос с параметрами"),
+        BotCommand(command="debug_rag", description="Отладка RAG сервиса"),
         BotCommand(command="db_utils", description="Работа с базой данных"),
         BotCommand(command="help", description="Показать справку")
     ])

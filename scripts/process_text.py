@@ -12,8 +12,26 @@ import pandas as pd
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Load Russian language model
-nlp = spacy.load('ru_core_news_lg')
+# Lazy load Russian language model
+nlp = None
+
+def get_nlp():
+    """Lazy load spaCy model"""
+    global nlp
+    if nlp is None:
+        try:
+            nlp = spacy.load('ru_core_news_lg')
+            logger.info("Successfully loaded Russian spaCy model")
+        except OSError as e:
+            logger.error(f"Failed to load Russian spaCy model: {e}")
+            # Fallback to a simpler model or disable NLP features
+            try:
+                nlp = spacy.load('ru_core_news_sm')
+                logger.info("Loaded smaller Russian spaCy model as fallback")
+            except OSError:
+                logger.warning("No Russian spaCy model available, using basic text processing")
+                nlp = None
+    return nlp
 
 # Key node types to prioritize
 KEY_NODE_TYPES = {'Случай', 'Эстетика', 'Сезон', 'Тренд', 'Погода'}
@@ -93,7 +111,17 @@ class EnhancedTextProcessor:
             'аксессуары': ['аксессуары', 'сумка', 'украшения', 'серьги', 'браслет', 'колье', 'шарф', 'ремень', 'клатч']
         }
         
-        doc = nlp(text.lower())
+        nlp_model = get_nlp()
+        if nlp_model is None:
+            # Fallback to simple text matching
+            text_lower = text.lower()
+            for type_, keywords in item_types.items():
+                for keyword in keywords:
+                    if keyword in text_lower:
+                        return type_, keyword
+            return "", ""
+        
+        doc = nlp_model(text.lower())
         
         # First try to find specific item mentions (e.g., "обувь:лоферы")
         for token in doc:
@@ -121,7 +149,17 @@ class EnhancedTextProcessor:
 
     def _extract_styling_context(self, text: str) -> Tuple[bool, str]:
         """Extract styling context like 'стилизовать свитер' or 'носить пиджак'"""
-        doc = nlp(text.lower())
+        nlp_model = get_nlp()
+        if nlp_model is None:
+            # Fallback to simple text matching
+            styling_verbs = ['стилизовать', 'носить', 'сочетать', 'комбинировать']
+            text_lower = text.lower()
+            for verb in styling_verbs:
+                if verb in text_lower:
+                    return True, ""
+            return False, ""
+        
+        doc = nlp_model(text.lower())
         
         styling_verbs = ['стилизовать', 'носить', 'сочетать', 'комбинировать']
         
@@ -182,8 +220,13 @@ class EnhancedTextProcessor:
     def find_key_nodes(self, text: str) -> Dict[str, List[Dict[str, Any]]]:
         """Find key nodes with better alias handling and fuzzy matching"""
         with self.driver.session() as session:
-            doc = nlp(text.lower())
-            spans = set(self.get_text_spans(doc))
+            nlp_model = get_nlp()
+            if nlp_model is None:
+                # Fallback to simple text processing
+                spans = set(text.lower().split())
+            else:
+                doc = nlp_model(text.lower())
+                spans = set(self.get_text_spans(doc))
             
             # Add semantic mappings for seasons
             season_mappings = {
@@ -362,8 +405,13 @@ class EnhancedTextProcessor:
     def find_direct_concepts(self, text: str, key_nodes: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
         """Find concepts that are directly mentioned in the text"""
         with self.driver.session() as session:
-            doc = nlp(text)
-            spans = self.get_text_spans(doc)
+            nlp_model = get_nlp()
+            if nlp_model is None:
+                # Fallback to simple text processing
+                spans = set(text.lower().split())
+            else:
+                doc = nlp_model(text)
+                spans = self.get_text_spans(doc)
             
             # Extract item type and subtype
             item_type, item_subtype = self._extract_item_type(text)

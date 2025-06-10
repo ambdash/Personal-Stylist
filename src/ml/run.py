@@ -55,12 +55,44 @@ def get_model_specific_data_path(data_dir: str, model_name: str, split: str) -> 
 def load_model_with_adapter(model_name: str, adapter_path: str):
     """Load base model and LoRA adapter."""
     logger.info(f"Loading base model {model_name}...")
-    model, tokenizer = get_model_tokenizer(model_name)
+    
+    # Load tokenizer
+    from transformers import AutoTokenizer, AutoModelForCausalLM
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name,
+        trust_remote_code=True
+    )
+    tokenizer.pad_token = tokenizer.eos_token
+    
+    # Load base model
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        torch_dtype=torch.float16,
+        device_map="auto",
+        trust_remote_code=True
+    )
     
     logger.info(f"Loading LoRA adapter from {adapter_path}...")
     model = PeftModel.from_pretrained(model, adapter_path)
     
     return model, tokenizer
+
+def get_local_adapter_path(model_name: str) -> str:
+    """Get the local adapter path based on model name."""
+    project_root = Path(__file__).parent.parent.parent
+    
+    if "t-lite" in model_name.lower():
+        adapter_path = project_root / "src" / "ml" / "models" / "finetuned" / "t_lite"
+    elif "saiga" in model_name.lower():
+        adapter_path = project_root / "src" / "ml" / "models" / "finetuned" / "saiga"
+    else:
+        # Default to t_lite for now
+        adapter_path = project_root / "src" / "ml" / "models" / "finetuned" / "t_lite"
+    
+    if not adapter_path.exists():
+        raise FileNotFoundError(f"Adapter path not found: {adapter_path}")
+    
+    return str(adapter_path)
 
 def main():
     parser = argparse.ArgumentParser(description="Run model training or evaluation")
@@ -71,7 +103,8 @@ def main():
     parser.add_argument("--run_name", type=str, help="Name for this run (used for wandb and output files)")
     parser.add_argument("--wandb_project", type=str, default="fashion-qa", help="W&B project name")
     parser.add_argument("--no_wandb", action="store_true", help="Disable wandb logging")
-    parser.add_argument("--adapter_path", type=str, help="Path to LoRA adapter for evaluation")
+    parser.add_argument("--adapter_path", type=str, help="Path to LoRA adapter for evaluation (if not provided, will use local path)")
+    parser.add_argument("--use_local_adapter", action="store_true", help="Use local adapter from models/finetuned directory")
     args = parser.parse_args()
 
     # Create output directory
@@ -130,11 +163,16 @@ def main():
                 split="train"
             )
             
-            # Load model with adapter if provided
-            if args.adapter_path:
-                model, tokenizer = load_model_with_adapter(args.model, args.adapter_path)
+            # Determine adapter path
+            if args.use_local_adapter or not args.adapter_path:
+                adapter_path = get_local_adapter_path(args.model)
+                logger.info(f"Using local adapter path: {adapter_path}")
             else:
-                model, tokenizer = get_model_tokenizer(args.model)
+                adapter_path = args.adapter_path
+                logger.info(f"Using provided adapter path: {adapter_path}")
+            
+            # Load model with adapter
+            model, tokenizer = load_model_with_adapter(args.model, adapter_path)
             
             # Create test config
             test_config = TestConfig(

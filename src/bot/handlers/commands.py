@@ -53,18 +53,6 @@ async def cmd_help(message: Message):
     )
     await message.answer(help_text)
 
-@router.message(Command("ask"))
-async def cmd_ask(message: Message, state: FSMContext):
-    """Handle /ask command"""
-    keyboard = get_inference_type_keyboard()
-    await message.answer(
-        "🤖 Выберите режим запроса:\n\n"
-        "• Обычный - использует только модель для генерации ответа\n"
-        "• Умный - дополнительно использует базу знаний для более точного ответа",
-        reply_markup=keyboard
-    )
-    await state.set_state(UnifiedInferenceState.choosing_type)
-
 @router.message(Command("db_utils"))
 async def cmd_db_utils(message: Message, state: FSMContext):
     """Handle /db_utils command"""
@@ -246,9 +234,44 @@ async def handle_unknown_command(message: Message):
 
 # Default message handler
 @router.message()
-async def handle_default_message(message: Message):
-    """Handle any non-command message"""
+async def handle_default_message(message: Message, state: FSMContext):
+    """Handle any non-command message only if user is not in an active state"""
+    # Check if user is in any active state
+    current_state = await state.get_state()
+    
+    # If user is in an active state, don't handle the message here
+    # Let it pass through to the appropriate handler
+    if current_state is not None:
+        return
+    
+    # Check if the message looks like a style/fashion question
+    text = message.text.lower() if message.text else ""
+    style_keywords = [
+        'стиль', 'мода', 'одежда', 'образ', 'наряд', 'цвет', 'сочетание', 
+        'что надеть', 'как носить', 'подойдет', 'сочетается', 'выбрать',
+        'рекомендуй', 'посоветуй', 'помоги', 'подскажи'
+    ]
+    
+    # If message contains style-related keywords, start inference directly
+    if any(keyword in text for keyword in style_keywords) or len(text) > 10:
+        # Set state to waiting for prompt and process the message as a style question
+        await state.set_state(UnifiedInferenceState.waiting_for_prompt)
+        await state.update_data(use_rag=False, parameters={
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "top_k": 40,
+            "repetition_penalty": 1.2,
+            "max_new_tokens": 512
+        })
+        
+        # Import and call the inference handler
+        from src.bot.handlers.unified_inference_handler import handle_unified_prompt
+        await handle_unified_prompt(message, state)
+        return
+    
+    # Only handle short messages or non-style messages when user is not in any active state
     await message.answer(
-        "👋 Пожалуйста, используйте команды из меню или отправьте /help для списка команд.",
+        "👋 Пожалуйста, используйте команды из меню или отправьте /help для списка команд.\n\n"
+        "💡 Для получения рекомендаций по стилю используйте /ask или просто задайте вопрос о моде!",
         reply_markup=get_main_keyboard()
     ) 

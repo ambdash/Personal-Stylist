@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional
 from enum import Enum
 
@@ -6,17 +6,23 @@ class ModelName(str, Enum):
     STUB = "stub_model"
 
 class InferenceRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+    
     text: str
     model_name: Optional[ModelName] = None
     max_length: Optional[int] = 512
     temperature: Optional[float] = 0.7
 
 class InferenceResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+    
     generated_text: str
     model_used: str
     generation_time: float
 
 class ModelStatus(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+    
     name: str
     status: str
     loaded: bool
@@ -24,6 +30,8 @@ class ModelStatus(BaseModel):
     avg_inference_time: Optional[float]
 
 class HealthResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+    
     status: str
     models: List[ModelStatus]
     api_version: str
@@ -32,6 +40,8 @@ class HealthResponse(BaseModel):
     avg_latency: float
 
 class MetricsResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+    
     total_requests: int
     requests_per_model: dict
     average_latency: float

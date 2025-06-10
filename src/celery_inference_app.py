@@ -2,6 +2,16 @@ from celery import Celery
 import os
 from pathlib import Path
 import sys
+import multiprocessing
+
+# Set multiprocessing start method to spawn to avoid CUDA fork issues
+# Only set if not already set to avoid conflicts
+try:
+    if multiprocessing.get_start_method() != 'spawn':
+        multiprocessing.set_start_method('spawn', force=True)
+except RuntimeError:
+    # Method already set, continue
+    pass
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
@@ -25,6 +35,10 @@ app.conf.update(
     worker_prefetch_multiplier=1,
     task_acks_late=True,
     worker_max_tasks_per_child=1000,
+    
+    # Use solo pool for GPU workers to avoid multiprocessing issues
+    worker_pool='solo',
+    
     task_routes={
         'inference_worker.*': {'queue': 'inference'},
     },

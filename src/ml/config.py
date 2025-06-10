@@ -49,7 +49,7 @@ os.environ["HF_MODULES_CACHE"] = str(PROJECT_DATA_DIR / "modules")
 # Increased max length to accommodate system prompt and longer responses
 MAX_LENGTH = 2048
 
-SYSTEM_PROMPT = """Ты — персональный стилист, модный эксперт. Отвечай на вопрос так, как если бы давал совет клиенту. Делай рекомендации точными и стилистически осмысленными. Объясняй, почему тот или иной приём работает. Не пиши очевидного (например, «наденьте топ»). Говори про цвет, настроение, пропорции, фактуры. Учитывай сезон,функциональность и случай, если указано. Пиши по-русски. Ответ должен быть коротким и лаконичным, но содержательным."""
+SYSTEM_PROMPT = """Ты — профессиональный стилист. Давай практические рекомендации по одежде и стилю. Объясняй выбор через цвет, силуэт, пропорции и сочетания. Учитывай сезон, случай и функциональность. Отвечай кратко и по существу."""
 
 @dataclass
 class TrainingConfig:
@@ -87,11 +87,11 @@ class TestConfig:
 class InferenceConfig:
     model_name: str
     max_length: int = MAX_LENGTH
-    max_new_tokens: int = 512
-    temperature: float = 0.7
-    top_p: float = 0.9
-    top_k: int = 30
-    repetition_penalty: float = 1.2
+    max_new_tokens: int = 256        # Shorter responses
+    temperature: float = 0.5         # Less creative, more consistent
+    top_p: float = 0.8              # More focused word selection
+    top_k: int = 30                 # Fewer word options
+    repetition_penalty: float = 1.1  # Less aggressive repetition penalty
     do_sample: bool = True
     system_prompt: str = SYSTEM_PROMPT
 

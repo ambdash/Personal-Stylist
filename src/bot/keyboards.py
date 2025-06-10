@@ -197,6 +197,17 @@ def get_back_keyboard() -> InlineKeyboardMarkup:
     keyboard = [[InlineKeyboardButton(text="« Назад", callback_data="back")]]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
+def get_parameter_keyboard() -> InlineKeyboardMarkup:
+    """Get keyboard for parameter configuration"""
+    keyboard = [
+        [
+            InlineKeyboardButton(text="🎯 Использовать стандартные", callback_data="use_default_params"),
+            InlineKeyboardButton(text="⚙️ Настроить", callback_data="configure_params")
+        ],
+        [InlineKeyboardButton(text="❓ Объяснить параметры", callback_data="explain_params")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
 @router.callback_query(F.data == "back_to_menu")
 async def back_to_menu(callback: CallbackQuery):
     """Handle back to menu button"""

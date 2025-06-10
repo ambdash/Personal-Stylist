@@ -10,7 +10,7 @@ def add_shoe_relations():
     """Add ЯВЛЯЕТСЯ_ОБУВЬЮ relations to shoe concepts"""
     
     # Connect to Neo4j
-    driver = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', 'password'))
+    driver = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', 'password123'))
     
     try:
         with driver.session() as session:
